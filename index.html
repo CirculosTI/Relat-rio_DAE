@@ -1125,8 +1125,8 @@
             const [activeTab, setActiveTab] = React.useState('fiscal'); // 'dae' ou 'fiscal'
 
             return (
-                <div className="min-h-screen bg-gray-100 flex flex-col items-center p-8">
-                    <div className="w-full max-w-4xl bg-white rounded-lg shadow-xl">
+                <div className="min-h-screen bg-gray-100 flex flex-col w-full"> {/* Removido items-center e p-8, adicionado w-full */}
+                    <div className="w-full bg-white rounded-lg shadow-xl"> {/* Removido max-w-4xl */}
                         {/* Navegação por abas */}
                         <div className="flex border-b border-gray-200">
                             <button
