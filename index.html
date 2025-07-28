@@ -1,1181 +1,1163 @@
-import React, { useState, useEffect } from 'react';
-
-// Tabela de alíquotas por UF (Estado)
-const ALIQUOTAS_UF = {
-    'PE': 0.18, 'SP': 0.18, 'RJ': 0.20, 'MG': 0.18,
-    'BA': 0.18, 'PR': 0.18,
-};
-
-// Namespace para a leitura do XML da NF-e
-const NS = 'http://www.portalfiscal.inf.br/nfe';
-
-/**
- * Componente para exibir mensagens de status.
- * @param {Object} props - As propriedades do componente.
- * @param {string} props.message - A mensagem a ser exibida.
- * @param {'success'|'warning'|'error'|'info'} props.type - O tipo da mensagem para estilização.
- */
-const MessageBox = ({ message, type }) => {
-    if (!message) return null;
-    return (
-        <div className={`message-box mt-4 p-4 rounded-lg font-medium text-left
-            ${type === 'success' ? 'bg-green-100 text-green-800 border border-green-400' : ''}
-            ${type === 'warning' ? 'bg-yellow-100 text-yellow-800 border border-yellow-400' : ''}
-            ${type === 'error' ? 'bg-red-100 text-red-800 border border-red-500' : ''}
-            ${type === 'info' ? 'bg-blue-100 text-blue-800 border border-blue-400' : ''}
-        `}>
-            {message}
-        </div>
-    );
-};
-
-/**
- * Componente principal do Gerador de Relatório DAE.
- */
-const DAEReportGenerator = () => {
-    const [selectedFiles, setSelectedFiles] = useState([]);
-    const [reportData, setReportData] = useState([]);
-    const [message, setMessage] = useState('');
-    const [messageType, setMessageType] = useState('');
-
-    /**
-     * Exibe uma mensagem na caixa de mensagens da interface.
-     * @param {string} msg - A mensagem a ser exibida.
-     * @param {'success'|'warning'|'error'|'info'} type - O tipo da mensagem (para estilização).
-     */
-    const showMessage = (msg, type) => {
-        setMessage(msg);
-        setMessageType(type);
-    };
-
-    /**
-     * Limpa a caixa de mensagens.
-     */
-    const clearMessage = () => {
-        setMessage('');
-        setMessageType('');
-    };
-
-    /**
-     * Lida com a seleção de arquivos XML.
-     * @param {Event} event - O evento de mudança do input de arquivo.
-     */
-    const handleFileChange = (event) => {
-        setSelectedFiles(Array.from(event.target.files));
-        clearMessage();
-        setReportData([]); // Limpa os dados do relatório ao selecionar novos arquivos
-    };
-
-    /**
-     * Processa um único arquivo XML e extrai os dados da NF-e.
-     * @param {string} xmlString - O conteúdo do arquivo XML como string.
-     * @param {string} fileName - O nome do arquivo XML (para mensagens de erro).
-     * @returns {Object|null} Os dados processados da NF-e ou null em caso de erro.
-     */
-    const processXmlFile = (xmlString, fileName) => {
-        try {
-            const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(xmlString, "text/xml");
-
-            // Verifica se houve erro de parseamento do XML
-            if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
-                throw new Error("Erro de parseamento do XML: " + xmlDoc.getElementsByTagName("parsererror")[0].textContent);
-            }
-
-            // Funções auxiliares para encontrar elementos com e sem namespace
-            const findElement = (parent, tagName, useNS = true) => {
-                const tagParts = tagName.split('>').map(part => part.trim());
-                let currentParent = parent;
-                for (let i = 0; i < tagParts.length; i++) {
-                    const currentTagName = tagParts[i];
-                    let elements;
-                    if (useNS) {
-                        elements = currentParent.getElementsByTagNameNS(NS, currentTagName);
-                    } else {
-                        elements = currentParent.getElementsByTagName(currentTagName);
-                    }
-                    if (elements.length > 0) {
-                        currentParent = elements[0];
-                    } else {
-                        return null; // Element not found in the current path
-                    }
-                }
-                return currentParent;
-            };
-
-            const findElementText = (parent, tagName, useNS = true) => {
-                const element = findElement(parent, tagName, useNS);
-                return element ? element.textContent : '';
-            };
-
-            const findElements = (parent, tagName, useNS = true) => {
-                const tagParts = tagName.split('>').map(part => part.trim());
-                let currentElements = [parent];
-                for (let i = 0; i < tagParts.length; i++) {
-                    const nextElements = [];
-                    const currentTagName = tagParts[i];
-                    currentElements.forEach(elem => {
-                        if (elem) {
-                            let elements;
-                            if (useNS) {
-                                elements = elem.getElementsByTagNameNS(NS, currentTagName);
-                            } else {
-                                elements = elem.getElementsByTagName(currentTagName);
-                            }
-                            Array.from(elements).forEach(child => {
-                                nextElements.push(child);
-                            });
-                        }
-                    });
-                    currentElements = nextElements;
-                }
-                return currentElements;
-            };
-
-            // Tenta encontrar infNFe com namespace, se falhar, tenta sem namespace
-            let infNFe = xmlDoc.getElementsByTagNameNS(NS, 'infNFe')[0];
-            if (!infNFe) {
-                infNFe = xmlDoc.getElementsByTagName('infNFe')[0]; // Fallback without namespace
-                if (!infNFe) {
-                    throw new Error("Elemento infNFe não encontrado no XML.");
-                }
-            }
-
-            const nNF = findElementText(infNFe, 'nNF', true) || findElementText(infNFe, 'nNF', false);
-            const emit = findElement(infNFe, 'emit', true) || findElement(infNFe, 'emit', false);
-            if (!emit) throw new Error("Elemento emit não encontrado.");
-
-            const uf_emitente = findElementText(emit, 'enderEmit > UF', true) || findElementText(emit, 'enderEmit > UF', false);
-            const cnpj_emitente = emit.getElementsByTagNameNS(NS, 'CNPJ')[0]?.textContent || emit.getElementsByTagName('CNPJ')[0]?.textContent || '';
-            const dhEmi_raw = findElementText(infNFe, 'dhEmi', true) || findElementText(infNFe, 'dhEmi', false);
-
-            if (!nNF || !uf_emitente || !cnpj_emitente || !dhEmi_raw) {
-                throw new Error("Dados essenciais (Nº NF-e, UF, CNPJ, Data Emissão) não encontrados.");
-            }
-
-            const data_emissao = new Date(dhEmi_raw.substring(0, 10));
-
-            let valor_mercadoria = 0;
-            const vProdElements = findElements(infNFe, 'det > prod > vProd', true) || findElements(infNFe, 'det > prod > vProd', false);
-            vProdElements.forEach(v => {
-                valor_mercadoria += parseFloat(v.textContent || '0');
-            });
-
-            const frete = parseFloat(findElementText(infNFe, 'transp > vFrete', true) || findElementText(infNFe, 'transp > vFrete', false) || '0');
-            const ipi = parseFloat(findElementText(infNFe, 'total > ICMSTot > vIPI', true) || findElementText(infNFe, 'total > ICMSTot > vIPI', false) || '0');
-            const icms_destacado = parseFloat(findElementText(infNFe, 'total > ICMSTot > vICMS', true) || findElementText(infNFe, 'total > ICMSTot > vICMS', false) || '0');
-            const icms_st = parseFloat(findElementText(infNFe, 'total > ICMSTot > vICMSST', true) || findElementText(infNFe, 'total > ICMSTot > vICMSST', false) || '0');
-
-            let valor_reducao_bc = 0;
-            const detElements = findElements(infNFe, 'det', true) || findElements(infNFe, 'det', false);
-            detElements.forEach(det => {
-                const icmsNodes = det.getElementsByTagNameNS(NS, 'ICMS');
-                const icmsNodesNoNS = det.getElementsByTagName('ICMS');
-                const relevantIcmsNodes = icmsNodes.length > 0 ? icmsNodes : icmsNodesNoNS;
-
-                if (relevantIcmsNodes.length > 0) {
-                    const icmsNode = relevantIcmsNodes[0];
-                    const icmsSubTypes = ['ICMS00', 'ICMS10', 'ICMS20', 'ICMS30', 'ICMS40', 'ICMS51', 'ICMS60', 'ICMS70', 'ICMS90'];
-                    for (const subType of icmsSubTypes) {
-                        let specificIcmsNode = icmsNode.getElementsByTagNameNS(NS, subType)[0];
-                        if (!specificIcmsNode) {
-                            specificIcmsNode = icmsNode.getElementsByTagName(subType)[0]; // Fallback without namespace
-                        }
-
-                        if (specificIcmsNode) {
-                            const pRedBC = parseFloat(findElementText(specificIcmsNode, 'pRedBC', true) || findElementText(specificIcmsNode, 'pRedBC', false) || '0');
-                            const vBC = parseFloat(findElementText(specificIcmsNode, 'vBC', true) || findElementText(specificIcmsNode, 'vBC', false) || '0');
-                            if (pRedBC > 0 && vBC > 0) {
-                                const vBCRed = parseFloat(findElementText(specificIcmsNode, 'vBCRed', true) || findElementText(specificIcmsNode, 'vBCRed', false) || '0');
-                                if (vBCRed > 0) {
-                                    valor_reducao_bc += (vBC - vBCRed);
-                                } else {
-                                    valor_reducao_bc += (vBC * (pRedBC / 100));
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-
-            const aliquota = ALIQUOTAS_UF[uf_emitente] || 0.18;
-            const base_calculo = valor_mercadoria + frete + ipi;
-            const icms_interno = base_calculo * aliquota;
-            const dae_recolher = icms_interno - icms_destacado;
-
-            // Grupo Mercadoria - Placeholder. Personalize esta lógica conforme a estrutura do seu XML.
-            // Exemplo: const grupoMercadoria = findElementText(det, 'prod > NCM');
-            const grupo_mercadoria = '';
-
-            // Determina o Tipo de Tributação para agrupamento
-            let tipo_tributacao = "Outros";
-            if (icms_st > 0) {
-                tipo_tributacao = "Substituição Tributária";
-            } else if (dae_recolher > 0) {
-                tipo_tributacao = "Antecipação";
-            }
-
-            return {
-                'Data Emissão': data_emissao.toLocaleDateString('pt-BR'),
-                'Data Emissão Sort': data_emissao.getTime(),
-                'Nº NF-e': nNF,
-                'CNPJ Emitente': cnpj_emitente,
-                'Estado': uf_emitente,
-                'Grupo Mercadoria': grupo_mercadoria,
-                'Tipo Tributação': tipo_tributacao,
-                'Valor Mercadoria': valor_mercadoria,
-                'Frete': frete,
-                'IPI': ipi,
-                'ICMS Destacado': icms_destacado,
-                'ICMS ST': icms_st,
-                'Alíquota Interna': `${(aliquota * 100).toFixed(0)}%`,
-                'Base de Cálculo': base_calculo,
-                'Valor Redução BC': valor_reducao_bc,
-                'ICMS Interno': icms_interno,
-                'DAE a Recolher': dae_recolher
-            };
-
-        } catch (e) {
-            console.error(`Erro ao processar ${fileName}:`, e);
-            showMessage(`Erro ao processar ${fileName}: ${e.message}`, 'error');
-            return null;
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Relatórios Fiscais</title>
+    <!-- Tailwind CSS CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <!-- React CDN -->
+    <script crossorigin src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <!-- Babel CDN for JSX transformation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        /* Estilos personalizados para a fonte Inter */
+        body {
+            font-family: "Inter", sans-serif;
         }
-    };
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-    /**
-     * Lida com o processamento dos arquivos XML selecionados.
-     */
-    const handleProcessFiles = async () => {
-        clearMessage();
-        if (selectedFiles.length === 0) {
-            showMessage("Por favor, selecione pelo menos um arquivo XML.", "warning");
-            return;
-        }
-
-        const processed = [];
-        let errorsCount = 0;
-
-        for (const file of selectedFiles) {
-            const reader = new FileReader();
-            await new Promise((resolve) => {
-                reader.onload = (e) => {
-                    const xmlString = e.target.result;
-                    const result = processXmlFile(xmlString, file.name);
-                    if (result) {
-                        processed.push(result);
-                    } else {
-                        errorsCount++;
-                    }
-                    resolve();
-                };
-                reader.onerror = () => {
-                    showMessage(`Erro ao ler o arquivo: ${file.name}`, 'error');
-                    errorsCount++;
-                    resolve();
-                };
-                reader.readAsText(file);
-            });
-        }
-
-        if (processed.length === 0) {
-            showMessage("Nenhum XML válido foi encontrado ou processado com sucesso.", "warning");
-            setReportData([]);
-            return;
-        }
-
-        // Ordena os dados para agrupamento: Tipo Tributação, CNPJ, Estado, Data Emissão
-        processed.sort((a, b) => {
-            if (a['Tipo Tributação'] !== b['Tipo Tributação']) {
-                return a['Tipo Tributação'].localeCompare(b['Tipo Tributacao']);
-            }
-            if (a['CNPJ Emitente'] !== b['CNPJ Emitente']) {
-                return a['CNPJ Emitente'].localeCompare(b['CNPJ Emitente']);
-            }
-            if (a['Estado'] !== b['Estado']) {
-                return a['Estado'].localeCompare(b['Estado']);
-            }
-            return a['Data Emissão Sort'] - b['Data Emissão Sort'];
-        });
-
-        // Calcula os totais e adiciona as linhas de agrupamento
-        const finalData = [];
-        let currentTipoTributacao = null;
-        let currentCnpj = null;
-        let currentEstado = null;
-
-        const createTotalObject = () => ({
-            'Valor Mercadoria': 0, 'Frete': 0, 'IPI': 0, 'ICMS Destacado': 0, 'ICMS ST': 0,
-            'Base de Cálculo': 0, 'Valor Redução BC': 0, 'ICMS Interno': 0, 'DAE a Recolher': 0
-        });
-
-        let subtotalTipoTributacao = createTotalObject();
-        let subtotalCnpj = createTotalObject();
-        let subtotalEstado = createTotalObject();
-        let grandTotal = createTotalObject();
-
-        const addSubtotalRow = (type, values, label) => {
-            const row = {
-                'Data Emissão': '', 'Nº NF-e': '', 'CNPJ Emitente': '', 'Estado': '', 'Grupo Mercadoria': '',
-                'Tipo Tributação': '', // Empty for subtotal rows
-                'Valor Mercadoria': values['Valor Mercadoria'],
-                'Frete': values['Frete'],
-                'IPI': values['IPI'],
-                'ICMS Destacado': values['ICMS Destacado'],
-                'ICMS ST': values['ICMS ST'],
-                'Alíquota Interna': '',
-                'Base de Cálculo': values['Base de Cálculo'],
-                'Valor Redução BC': values['Valor Redução BC'],
-                'ICMS Interno': label, // Store label here for subtotal rows
-                'DAE a Recolher': values['DAE a Recolher']
-            };
-            finalData.push({ type: 'subtotal', data: row, label: label });
+    <script type="text/babel">
+        // Tabela de alíquotas por UF (Estado)
+        const ALIQUOTAS_UF = {
+            'PE': 0.18, 'SP': 0.18, 'RJ': 0.20, 'MG': 0.18,
+            'BA': 0.18, 'PR': 0.18,
         };
 
-        processed.forEach((rowData, index) => {
-            // Verifica mudança de Tipo Tributação
-            if (rowData['Tipo Tributação'] !== currentTipoTributacao) {
-                if (currentTipoTributacao !== null) {
-                    if (currentEstado !== null) {
-                        addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
-                        Object.assign(subtotalEstado, createTotalObject());
-                    }
-                    if (currentCnpj !== null) {
-                        addSubtotalRow('cnpj', subtotalCnpj, `Subtotal CNPJ ${currentCnpj}:`);
-                        Object.assign(subtotalCnpj, createTotalObject());
-                    }
-                    addSubtotalRow('tipoTributacao', subtotalTipoTributacao, `Subtotal ${currentTipoTributacao}:`);
-                    Object.assign(subtotalTipoTributacao, createTotalObject());
-                }
-                finalData.push({ type: 'group-header', label: `Tipo de Tributação: ${rowData['Tipo Tributação']}` });
-                currentTipoTributacao = rowData['Tipo Tributação'];
-                currentCnpj = null;
-                currentEstado = null;
-            }
+        // Namespace para a leitura do XML da NF-e
+        const NS = 'http://www.portalfiscal.inf.br/nfe';
 
-            // Verifica mudança de CNPJ
-            if (rowData['CNPJ Emitente'] !== currentCnpj) {
-                if (currentCnpj !== null) {
-                    if (currentEstado !== null) {
-                        addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
-                        Object.assign(subtotalEstado, createTotalObject());
-                    }
-                    addSubtotalRow('cnpj', subtotalCnpj, `Subtotal CNPJ ${currentCnpj}:`);
-                    Object.assign(subtotalCnpj, createTotalObject());
-                }
-                finalData.push({ type: 'group-header', label: `CNPJ: ${rowData['CNPJ Emitente']}` });
-                currentCnpj = rowData['CNPJ Emitente'];
-                currentEstado = null;
-            }
-
-            // Verifica mudança de Estado dentro do mesmo CNPJ
-            if (rowData['Estado'] !== currentEstado) {
-                if (currentEstado !== null) {
-                    addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
-                    Object.assign(subtotalEstado, createTotalObject());
-                }
-                finalData.push({ type: 'group-header', label: `Estado: ${rowData['Estado']}` });
-                currentEstado = rowData['Estado'];
-            }
-
-            finalData.push({ type: 'data', data: rowData });
-
-            // Acumula os totais
-            Object.keys(subtotalTipoTributacao).forEach(key => { subtotalTipoTributacao[key] += rowData[key]; });
-            Object.keys(subtotalCnpj).forEach(key => { subtotalCnpj[key] += rowData[key]; });
-            Object.keys(subtotalEstado).forEach(key => { subtotalEstado[key] += rowData[key]; });
-            Object.keys(grandTotal).forEach(key => { grandTotal[key] += rowData[key]; });
-        });
-
-        // Adiciona os últimos subtotais de Estado, CNPJ e Tipo Tributação
-        if (currentEstado !== null) {
-            addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
-        }
-        if (currentCnpj !== null) {
-            addSubtotalRow('cnpj', subtotalCnpj, `Subtotal CNPJ ${currentCnpj}:`);
-        }
-        if (currentTipoTributacao !== null) {
-            addSubtotalRow('tipoTributacao', subtotalTipoTributacao, `Subtotal ${currentTipoTributacao}:`);
-        }
-
-        // Adiciona o total geral
-        addSubtotalRow('total', grandTotal, 'TOTAL GERAL:');
-
-        setReportData(finalData);
-        showMessage(`Processamento concluído. ${processed.length} arquivos processados com sucesso. ${errorsCount} erros.`, 'success');
-    };
-
-    /**
-     * Gera e baixa um arquivo CSV com base nos dados fornecidos, incluindo subtotais.
-     */
-    const downloadCsv = () => {
-        if (reportData.length === 0) {
-            showMessage("Não há dados para baixar.", "warning");
-            return;
-        }
-
-        const headers = [
-            'Data Emissão', 'Nº NF-e', 'CNPJ Emitente', 'Estado', 'Grupo Mercadoria', 'Tipo Tributação',
-            'Valor Mercadoria', 'Frete', 'IPI', 'ICMS Destacado', 'ICMS ST',
-            'Alíquota Interna', 'Base de Cálculo', 'Valor Redução BC', 'ICMS Interno', 'DAE a Recolher'
-        ];
-        const csvRows = [];
-        csvRows.push(headers.join(';')); // Cabeçalho CSV
-
-        reportData.forEach(item => {
-            if (item.type === 'data' || item.type === 'subtotal' || item.type === 'total') {
-                const rowData = item.data;
-                const values = headers.map(header => {
-                    let value = rowData[header];
-                    // Special handling for 'ICMS Interno' if it's a label string
-                    if (header === 'ICMS Interno' && (item.type === 'subtotal' || item.type === 'total')) {
-                        value = item.label; // Use the label directly
-                    } else if (typeof value === 'number') {
-                        value = value.toFixed(2);
-                    }
-                    const escapedValue = ('' + value).replace(/"/g, '""');
-                    return (escapedValue.includes(';') || escapedValue.includes('"')) ? `"${escapedValue}"` : escapedValue;
-                });
-                csvRows.push(values.join(';'));
-            } else if (item.type === 'group-header') {
-                // For group headers, add a row with just the label in the first column
-                const emptyCells = Array(headers.length - 1).fill('');
-                csvRows.push(`${item.label};${emptyCells.join(';')}`);
-            }
-        });
-
-        const csvString = csvRows.join('\n');
-        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.setAttribute('href', url);
-        a.setAttribute('download', 'relatorio_dae_agrupado.csv');
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    };
-
-    return (
-        <div className="p-6 bg-white rounded-lg shadow-md">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6">Gerador de Relatório DAE</h2>
-
-            <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mb-4">
-                <div className="relative inline-block overflow-hidden cursor-pointer bg-blue-500 hover:bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold transition duration-200">
-                    Selecionar Arquivos XML
-                    <input type="file" id="xmlFileInput" multiple accept=".xml" className="absolute left-0 top-0 opacity-0 cursor-pointer w-full h-full" onChange={handleFileChange} />
+        /**
+         * Componente para exibir mensagens de status.
+         * @param {Object} props - As propriedades do componente.
+         * @param {string} props.message - A mensagem a ser exibida.
+         * @param {'success'|'warning'|'error'|'info'} props.type - O tipo da mensagem para estilização.
+         */
+        const MessageBox = ({ message, type }) => {
+            if (!message) return null;
+            return (
+                <div className={`message-box mt-4 p-4 rounded-lg font-medium text-left
+                    ${type === 'success' ? 'bg-green-100 text-green-800 border border-green-400' : ''}
+                    ${type === 'warning' ? 'bg-yellow-100 text-yellow-800 border border-yellow-400' : ''}
+                    ${type === 'error' ? 'bg-red-100 text-red-800 border border-red-500' : ''}
+                    ${type === 'info' ? 'bg-blue-100 text-blue-800 border border-blue-400' : ''}
+                `}>
+                    {message}
                 </div>
-                <button
-                    onClick={handleProcessFiles}
-                    className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out"
-                >
-                    Processar e Gerar Relatório
-                </button>
-            </div>
+            );
+        };
 
-            <MessageBox message={message} type={messageType} />
+        /**
+         * Componente principal do Gerador de Relatório DAE.
+         */
+        const DAEReportGenerator = () => {
+            // Acessando useState e useEffect diretamente de React
+            const [selectedFiles, setSelectedFiles] = React.useState([]);
+            const [reportData, setReportData] = React.useState([]);
+            const [message, setMessage] = React.useState('');
+            const [messageType, setMessageType] = React.useState('');
 
-            {reportData.length > 0 && (
-                <div className="mt-8">
-                    <h3 className="text-xl font-semibold text-gray-700 mb-4">Relatório de DAE</h3>
-                    <div className="overflow-x-auto rounded-xl shadow-md">
-                        <table className="min-w-full bg-white border border-gray-200">
-                            <thead>
-                                <tr>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Data Emissão</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Nº NF-e</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">CNPJ Emitente</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Estado</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Grupo Mercadoria</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Tipo Tributação</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Valor Mercadoria</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Frete</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">IPI</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">ICMS Destacado</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">ICMS ST</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Alíquota Interna</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Base de Cálculo</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Valor Redução BC</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">ICMS Interno</th>
-                                    <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">DAE a Recolher</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {reportData.map((item, index) => {
-                                    if (item.type === 'group-header') {
-                                        return (
-                                            <tr key={`group-${index}`} className="group-header">
-                                                <td colSpan="16" className="py-2 px-4 text-left font-bold bg-blue-100 text-blue-800">
-                                                    {item.label}
-                                                </td>
-                                            </tr>
-                                        );
-                                    } else if (item.type === 'subtotal') {
-                                        const rowData = item.data;
-                                        return (
-                                            <tr key={`subtotal-${index}`} className="subtotal-row">
-                                                <td colSpan="6" className="py-2 px-4 text-right font-bold border-t-2 border-green-400">
-                                                    {item.label}
-                                                </td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Valor Mercadoria'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Frete'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['IPI'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['ICMS Destacado'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['ICMS ST'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400"></td> {/* Alíquota Interna */}
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Base de Cálculo'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Valor Redução BC'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['ICMS Interno']}</td> {/* Display label directly for subtotal */}
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['DAE a Recolher'].toFixed(2)}</td>
-                                            </tr>
-                                        );
-                                    } else if (item.type === 'total') {
-                                        const rowData = item.data;
-                                        return (
-                                            <tr key={`total-${index}`} className="total-row">
-                                                <td colSpan="6" className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">
-                                                    {item.label}
-                                                </td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Valor Mercadoria'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Frete'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['IPI'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['ICMS Destacado'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['ICMS ST'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400"></td> {/* Alíquota Interna */}
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Base de Cálculo'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Valor Redução BC'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['ICMS Interno']}</td> {/* Display label directly for total */}
-                                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['DAE a Recolher'].toFixed(2)}</td>
-                                            </tr>
-                                        );
-                                    } else {
-                                        const rowData = item.data;
-                                        return (
-                                            <tr key={`data-${index}`} className="text-sm text-gray-700">
-                                                <td className="py-2 px-4 border-b border-gray-200">{rowData['Data Emissão']}</td>
-                                                <td className="py-2 px-4 border-b border-gray-200">{rowData['Nº NF-e']}</td>
-                                                <td className="py-2 px-4 border-b border-gray-200">{rowData['CNPJ Emitente']}</td>
-                                                <td className="py-2 px-4 border-b border-gray-200">{rowData['Estado']}</td>
-                                                <td className="py-2 px-4 border-b border-gray-200">{rowData['Grupo Mercadoria']}</td>
-                                                <td className="py-2 px-4 border-b border-gray-200">{rowData['Tipo Tributação']}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Valor Mercadoria'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Frete'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['IPI'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['ICMS Destacado'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['ICMS ST'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Alíquota Interna']}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Base de Cálculo'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Valor Redução BC'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['ICMS Interno'].toFixed(2)}</td>
-                                                <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['DAE a Recolher'].toFixed(2)}</td>
-                                            </tr>
-                                        );
-                                    }
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div className="flex justify-center mt-6">
-                        <button onClick={downloadCsv} className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out">
-                            Baixar como CSV
-                        </button>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-/**
- * Componente para o Relatório Fiscal com preenchimento manual.
- */
-const FiscalReport = () => {
-    // Taxas de PIS e COFINS conforme o HTML fornecido
-    const PIS_RATE = 0.0165;
-    const COFINS_RATE = 0.076;
-
-    // Define a estrutura para cada categoria de linha no relatório fiscal
-    // ATENÇÃO: Adapte estas definições para corresponder exatamente às suas linhas da planilha!
-    const FISCAL_REPORT_DEFINITIONS = [
-        { id: 'comprasC_ICMS', label: 'COMPRAS C/ICMS', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 26079.71 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 }, // Merged cell in HTML, but distinct input
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 }, // HTML shows '-', but it's a value
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 430.32 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 1982.06 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 564.64 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' }, // Empty in HTML, but placeholder for H
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' }, // Empty in HTML, but placeholder for I
-        ]},
-        { id: 'comprasS_ICMS', label: 'COMPRAS S/ICMS', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 174313.36 },
-            { id: 'outrosCreditos', label: 'IPI SALDO ANTERIOR (Col. H)', type: 'text', initialValue: 'IPI SALDO ANTERIOR' }, // Label from HTML
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' }, // Empty
-        ]},
-        { id: 'armazenagem', label: 'ARMAZENAGEM', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
-        ]},
-        { id: 'aluguelImovel', label: 'ALUGUEL IMÓVEL', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 50000.00 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', isFormula: true, initialValue: 0 }, // Calculated
-            { id: 'cofins', label: 'COFINS', type: 'number', isFormula: true, initialValue: 0 }, // Calculated
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
-        ]},
-        { id: 'aluguelMaquinas', label: 'ALUGUEL MÁQUINAS', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
-        ]},
-        { id: 'saldoCredorAnter', label: 'SALDO CREDOR ANTER', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 17215.00 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 79293.32 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
-        ]},
-        { id: 'incentivo', label: 'INCENTIVO', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 18064.33 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
-        ]},
-        { id: 'icmsFronteira', label: 'ICMS FRONTEIRA', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
-        ]},
-        { id: 'notaAcrescimo', label: 'NOTA ACRESCIMO', isFormulaRow: true, fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', isFormula: true, initialValue: 0 }, // Calculated
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', isFormula: true, initialValue: 0 }, // Calculated (assuming it's sum of valor2 from above)
-            { id: 'icms', label: 'ICMS', type: 'number', isFormula: true, initialValue: 0 }, // Calculated
-            { id: 'pis', label: 'PIS', type: 'number', isFormula: true, initialValue: 0 }, // Calculated
-            { id: 'cofins', label: 'COFINS', type: 'number', isFormula: true, initialValue: 0 }, // Calculated
-            { id: 'ipi', label: 'IPI', type: 'number', isFormula: true, initialValue: 0 }, // Calculated
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' }, // Empty
-            { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' }, // Empty
-        ]},
-        { id: 'vendasS_ICMS', label: 'VENDAS S/ICMS', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
-            { id: 'ipi', label: 'IPI', type: 'text', initialValue: 'IPI' }, // Text label from HTML
-            { id: 'outrosCreditos', label: 'ISS (Col. H)', type: 'text', initialValue: 'ISS' }, // Text label from HTML
-            { id: 'iss', label: 'ISS RETIDO (Col. I)', type: 'text', initialValue: 'ISS RETIDO' }, // Text label from HTML
-        ]},
-        { id: 'vendasC_ICMS', label: 'VENDAS C/ICMS', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 223197.55 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 24507.41 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 3682.76 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 16963.01 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 9393.07 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'number', initialValue: 0 }, // This is a number in the HTML for this row
-        ]},
-        { id: 'servicos', label: 'SERVIÇOS', fields: [
-            { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
-            { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
-            { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
-            { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
-            { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
-            { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
-            { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'number', initialValue: 0 },
-            { id: 'iss', label: 'ISS (Col. I)', type: 'number', initialValue: 0 },
-        ]},
-    ];
-
-    // Define as colunas que terão campos de entrada para cada categoria de linha
-    // Esta lista é usada para os cabeçalhos da tabela e para iteração de campos
-    const FISCAL_REPORT_INPUT_COLUMNS = [
-        { id: 'valor1', label: 'Valor (Col. B)', type: 'number' },
-        { id: 'valor2', label: 'Valor (Col. C)', type: 'number' },
-        { id: 'icms', label: 'ICMS', type: 'number' },
-        { id: 'pis', label: 'PIS', type: 'number' },
-        { id: 'cofins', label: 'COFINS', type: 'number' },
-        { id: 'ipi', label: 'IPI', type: 'number' },
-        { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'number' },
-        { id: 'iss', label: 'ISS (Col. I)', type: 'number' },
-    ];
-
-
-    // Inicializa o estado das linhas do relatório com valores padrão
-    const initialReportRows = {};
-    FISCAL_REPORT_DEFINITIONS.forEach(def => {
-        const rowData = {};
-        def.fields.forEach(field => {
-            rowData[field.id] = field.initialValue !== undefined ? field.initialValue : (field.type === 'number' ? 0 : '');
-        });
-        initialReportRows[def.id] = rowData;
-    });
-
-    const [reportRows, setReportRows] = useState(initialReportRows);
-    const [message, setMessage] = useState('');
-    const [messageType, setMessageType] = useState('');
-    // Removido o estado selectedCompany
-    // Removido o estado finalReportTotals
-
-    /**
-     * Exibe uma mensagem na caixa de mensagens da interface.
-     * @param {string} msg - A mensagem a ser exibida.
-     * @param {'success'|'warning'|'error'|'info'} type - O tipo da mensagem (para estilização).
-     */
-    const showMessageFiscal = (msg, type) => {
-        setMessage(msg);
-        setMessageType(type);
-    };
-
-    /**
-     * Limpa a caixa de mensagens.
-     */
-    const clearMessageFiscal = () => {
-        setMessage('');
-        setMessageType('');
-    };
-
-    /**
-     * Calcula as fórmulas para uma linha específica.
-     * @param {string} rowId - O ID da linha.
-     * @param {Object} rowData - Os dados da linha.
-     * @param {Object} allRows - Todos os dados das linhas para referências cruzadas.
-     * @returns {Object} A linha com as fórmulas calculadas.
-     */
-    const calculateSpecificRowFormulas = (rowId, rowData, allRows) => {
-        const updatedRowData = { ...rowData };
-
-        // FÓRMULAS ESPECÍFICAS POR LINHA (ADAPTE AQUI!)
-        if (rowId === 'aluguelImovel') {
-            updatedRowData.pis = (updatedRowData.valor1 ?? 0) * PIS_RATE;
-            updatedRowData.cofins = (updatedRowData.valor1 ?? 0) * COFINS_RATE;
-        } else if (rowId === 'notaAcrescimo') {
-            // PIS (NOTA ACRESCIMO) = COMPRAS C/ICMS PIS + SALDO CREDOR ANTER PIS + ALUGUEL IMÓVEL PIS
-            const comprasCIcmsPis = allRows.comprasC_ICMS?.pis ?? 0;
-            const saldoCredorAnterPis = allRows.saldoCredorAnter?.pis ?? 0;
-            const aluguelImovelPis = allRows.aluguelImovel?.pis ?? 0;
-            updatedRowData.pis = comprasCIcmsPis + saldoCredorAnterPis + aluguelImovelPis;
-
-            // COFINS (NOTA ACRESCIMO) = COMPRAS C/ICMS COFINS + SALDO CREDOR ANTER COFINS + ALUGUEL IMÓVEL COFINS
-            const comprasCIcmsCofins = allRows.comprasC_ICMS?.cofins ?? 0;
-            const saldoCredorAnterCofins = allRows.saldoCredorAnter?.cofins ?? 0;
-            const aluguelImovelCofins = allRows.aluguelImovel?.cofins ?? 0;
-            updatedRowData.cofins = comprasCIcmsCofins + saldoCredorAnterCofins + aluguelImovelCofins;
-
-            // IPI (NOTA ACRESCIMO) = COMPRAS C/ICMS IPI + COMPRAS S/ICMS IPI
-            const comprasCIcmsIpi = allRows.comprasC_ICMS?.ipi ?? 0;
-            const comprasSIcmsIpi = allRows.comprasS_ICMS?.ipi ?? 0;
-            updatedRowData.ipi = comprasCIcmsIpi + comprasSIcmsIpi;
-
-            // ICMS (NOTA ACRESCIMO) - Do HTML, é 18064.33, o mesmo que INCENTIVO ICMS.
-            // Então, é uma cópia direta de INCENTIVO ICMS.
-            updatedRowData.icms = allRows.incentivo?.icms ?? 0;
-        }
-        // ADICIONE MAIS FÓRMULAS PARA OUTRAS LINHAS AQUI SE NECESSÁRIO
-        return updatedRowData;
-    };
-
-    /**
-     * Lida com a mudança nos campos de uma linha existente.
-     * Recalcula as fórmulas para a linha editada.
-     * @param {string} rowId - O ID da linha sendo editada.
-     * @param {string} name - O nome do campo.
-     * @param {string} value - O novo valor do campo.
-     * @param {string} type - O tipo do input (para conversão de valor).
-     */
-    const handleRowEdit = (rowId, name, value, type) => {
-        setReportRows(prevRows => {
-            const updatedRows = { ...prevRows };
-            let newRowData = {
-                ...updatedRows[rowId],
-                [name]: type === 'number' ? parseFloat(value) || 0 : value
+            /**
+             * Exibe uma mensagem na caixa de mensagens da interface.
+             * @param {string} msg - A mensagem a ser exibida.
+             * @param {'success'|'warning'|'error'|'info'} type - O tipo da mensagem (para estilização).
+             */
+            const showMessage = (msg, type) => {
+                setMessage(msg);
+                setMessageType(type);
             };
 
-            // Recalcula fórmulas para a linha editada
-            newRowData = calculateSpecificRowFormulas(rowId, newRowData, updatedRows);
+            /**
+             * Limpa a caixa de mensagens.
+             */
+            const clearMessage = () => {
+                setMessage('');
+                setMessageType('');
+            };
 
-            updatedRows[rowId] = newRowData;
+            /**
+             * Lida com a seleção de arquivos XML.
+             * @param {Event} event - O evento de mudança do input de arquivo.
+             */
+            const handleFileChange = (event) => {
+                setSelectedFiles(Array.from(event.target.files));
+                clearMessage();
+                setReportData([]); // Limpa os dados do relatório ao selecionar novos arquivos
+            };
 
-            // Re-calcular as linhas que dependem desta linha (ex: NOTA ACRESCIMO depende de COMPRAS, SALDO CREDOR, ALUGUEL)
-            // Isso pode ser otimizado para recalcular apenas as linhas afetadas
-            const rowsToRecalculate = ['notaAcrescimo']; // Adicione IDs de linhas que dependem de outras
-            rowsToRecalculate.forEach(dependentRowId => {
-                if (updatedRows[dependentRowId]) {
-                    updatedRows[dependentRowId] = calculateSpecificRowFormulas(dependentRowId, updatedRows[dependentRowId], updatedRows);
-                }
-            });
+            /**
+             * Processa um único arquivo XML e extrai os dados da NF-e.
+             * @param {string} xmlString - O conteúdo do arquivo XML como string.
+             * @param {string} fileName - O nome do arquivo XML (para mensagens de erro).
+             * @returns {Object|null} Os dados processados da NF-e ou null em caso de erro.
+             */
+            const processXmlFile = (xmlString, fileName) => {
+                try {
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(xmlString, "text/xml");
 
-            return updatedRows;
-        });
-    };
-
-    // Efeito para recalcular todas as fórmulas ao carregar ou quando as dependências mudam
-    useEffect(() => {
-        setReportRows(prevRows => {
-            const updatedRows = { ...prevRows };
-            // Recalcula todas as linhas que são fórmulas para garantir consistência inicial
-            FISCAL_REPORT_DEFINITIONS.forEach(def => {
-                if (def.isFormulaRow) {
-                    updatedRows[def.id] = calculateSpecificRowFormulas(def.id, updatedRows[def.id], updatedRows);
-                }
-            });
-            return updatedRows;
-        });
-    }, []); // Executa apenas uma vez no montagem inicial
-
-
-    /**
-     * Calcula os totais das colunas numéricas para a linha de totais.
-     * Esta função agora é responsável por calcular os totais gerais da planilha.
-     * @param {Object} currentReportRows - O estado atual das linhas do relatório.
-     */
-    const calculateOverallTotals = (currentReportRows) => {
-        const totals = FISCAL_REPORT_INPUT_COLUMNS.reduce((acc, col) => {
-            acc[col.id] = 0;
-            return acc;
-        }, {});
-
-        // Inicializar todas as propriedades de totais para garantir que não sejam undefined
-        totals.totalVendas = 0;
-        totals.impostoPagarIcms = 0;
-        totals.impostoPagarPis = 0;
-        totals.impostoPagarCofins = 0;
-        totals.impostoPagarIpi = 0;
-        totals.impostoPagarIss = 0;
-        totals.totalImpostoAPagar = 0;
-        totals.issAPagar = 0;
-        totals.totalPagar = 0;
-        totals.totalImpostosGerais = 0; // Inicializar
-        totals.lucroLiquidoSimplificado = 0; // Inicializar
-
-
-        // Itera sobre as linhas definidas para somar os valores
-        FISCAL_REPORT_DEFINITIONS.forEach(def => {
-            const rowData = currentReportRows[def.id];
-            def.fields.forEach(field => {
-                if (field.type === 'number' && typeof rowData[field.id] === 'number') {
-                    totals[field.id] += rowData[field.id];
-                }
-            });
-        });
-
-        // FÓRMULAS DE TOTAIS GERAIS (ADAPTE AQUI!)
-        // TOTAL VENDAS = VENDAS S/ICMS (Valor1) + VENDAS C/ICMS (Valor1) + SERVIÇOS (Valor1)
-        totals.totalVendas = (currentReportRows.vendasS_ICMS?.valor1 ?? 0) +
-                              (currentReportRows.vendasC_ICMS?.valor1 ?? 0) +
-                              (currentReportRows.servicos?.valor1 ?? 0);
-
-        // IMPOSTO A PAGAR (ICMS, PIS, COFINS, IPI, ISS)
-        // ICMS (IMPOSTO A PAGAR): VENDAS C/ICMS ICMS - NOTA ACRESCIMO ICMS
-        totals.impostoPagarIcms = (currentReportRows.vendasC_ICMS?.icms ?? 0) - (currentReportRows.notaAcrescimo?.icms ?? 0);
-        // PIS (IMPOSTO A PAGAR): VENDAS C/ICMS PIS - NOTA ACRESCIMO PIS
-        totals.impostoPagarPis = (currentReportRows.vendasC_ICMS?.pis ?? 0) - (currentReportRows.notaAcrescimo?.pis ?? 0);
-        // COFINS (IMPOSTO A PAGAR): VENDAS C/ICMS COFINS + SALDO CREDOR ANTER COFINS + ALUGUEL IMÓVEL COFINS
-        totals.impostoPagarCofins = (currentReportRows.vendasC_ICMS?.cofins ?? 0) - (currentReportRows.notaAcrescimo?.cofins ?? 0);
-        // IPI (IMPOSTO A PAGAR): VENDAS C/ICMS IPI - NOTA ACRESCIMO IPI
-        totals.impostoPagarIpi = (currentReportRows.vendasC_ICMS?.ipi ?? 0) - (currentReportRows.notaAcrescimo?.ipi ?? 0);
-        // ISS (IMPOSTO A PAGAR): SERVIÇOS ISS - (VENDAS S/ICMS ISS, if numeric)
-        // Baseado no HTML, VENDAS S/ICMS ISS é uma string 'ISS RETIDO', então assumindo 0 para cálculo.
-        totals.impostoPagarIss = (currentReportRows.servicos?.iss ?? 0); // Assumindo que o ISS a pagar é o ISS de serviços
-
-        // TOTAL IMPOSTO A PAGAR (soma da linha IMPOSTO A PAGAR)
-        totals.totalImpostoAPagar = (totals.impostoPagarIcms ?? 0) + (totals.impostoPagarPis ?? 0) + (totals.impostoPagarCofins ?? 0) + (totals.impostoPagarIpi ?? 0) + (totals.impostoPagarIss ?? 0);
-
-        // ISS A PAGAR (do HTML, é '-')
-        totals.issAPagar = totals.impostoPagarIss; // Assumindo que é o mesmo que impostoPagarIss
-
-        // TOTAL PAGAR (do HTML, corresponde a TOTAL IMPOSTO A PAGAR)
-        totals.totalPagar = totals.totalImpostoAPagar;
-
-        // Total de Impostos Gerais (soma das colunas de impostos)
-        totals.totalImpostosGerais = (totals.icms ?? 0) + (totals.pis ?? 0) + (totals.cofins ?? 0) + (totals.ipi ?? 0) + (totals.iss ?? 0);
-
-        // Lucro Líquido Simplificado
-        totals.lucroLiquidoSimplificado = (totals.totalVendas ?? 0) - (totals.totalImpostosGerais ?? 0);
-
-
-        return totals;
-    };
-
-
-    /**
-     * Gera e baixa um arquivo CSV com os dados da planilha.
-     */
-    const downloadCsv = () => {
-        if (Object.keys(reportRows).length === 0) {
-            showMessageFiscal("Não há dados na planilha para baixar.", "warning");
-            return;
-        }
-
-        // Cabeçalhos: "Item" (para as categorias de linha) + os cabeçalhos das colunas de entrada
-        const headers = ['Item', ...FISCAL_REPORT_INPUT_COLUMNS.map(col => col.label)];
-        const csvRows = [];
-        csvRows.push(headers.join(';')); // Cabeçalho CSV
-
-        // Adiciona as linhas de dados
-        FISCAL_REPORT_DEFINITIONS.forEach(def => {
-            const rowData = reportRows[def.id];
-            const values = [
-                def.label, // A primeira coluna é o nome da categoria
-                ...FISCAL_REPORT_INPUT_COLUMNS.map(col => {
-                    let value = rowData[col.id];
-                    // Garante que o valor é um número antes de chamar toFixed
-                    if (typeof value === 'number') {
-                        value = value.toFixed(2).replace('.', ','); // Formata número para CSV em português
+                    // Verifica se houve erro de parseamento do XML
+                    if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
+                        throw new Error("Erro de parseamento do XML: " + xmlDoc.getElementsByTagName("parsererror")[0].textContent);
                     }
-                    const escapedValue = ('' + value).replace(/"/g, '""');
-                    return (escapedValue.includes(';') || escapedValue.includes('"')) ? `"${escapedValue}"` : escapedValue;
-                })
-            ];
-            csvRows.push(values.join(';'));
-        });
 
-        // Adiciona a linha de totais gerais ao CSV
-        const totals = calculateOverallTotals(reportRows); // Calcula os totais gerais
-        const totalRowValues = ['TOTAIS GERAIS:', ...FISCAL_REPORT_INPUT_COLUMNS.map(col => {
-            const totalValue = totals[col.id];
-            // Garante que o valor é um número antes de chamar toFixed
-            return typeof totalValue === 'number' ? totalValue.toFixed(2).replace('.', ',') : '';
-        })];
-        csvRows.push(totalRowValues.join(';'));
+                    // Funções auxiliares para encontrar elementos com e sem namespace
+                    const findElement = (parent, tagName, useNS = true) => {
+                        const tagParts = tagName.split('>').map(part => part.trim());
+                        let currentParent = parent;
+                        for (let i = 0; i < tagParts.length; i++) {
+                            const currentTagName = tagParts[i];
+                            let elements;
+                            if (useNS) {
+                                elements = currentParent.getElementsByTagNameNS(NS, currentTagName);
+                            } else {
+                                elements = currentParent.getElementsByTagName(currentTagName);
+                            }
+                            if (elements.length > 0) {
+                                currentParent = elements[0];
+                            } else {
+                                return null; // Element not found in the current path
+                            }
+                        }
+                        return currentParent;
+                    };
 
-        // Adicionar totais específicos como "TOTAL VENDAS", "Total Impostos Gerais", "Lucro Líquido Simplificado"
-        csvRows.push(`TOTAL VENDAS;${(totals.totalVendas ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`); // Ajuste o número de ';' conforme suas colunas
-        csvRows.push(`Total Impostos Gerais;${(totals.totalImpostosGerais ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`Lucro Líquido (Simpl.);${(totals.lucroLiquidoSimplificado ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`IMPOSTO A PAGAR - ICMS;${(totals.impostoPagarIcms ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`IMPOSTO A PAGAR - PIS;${(totals.impostoPagarPis ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`IMPOSTO A PAGAR - COFINS;${(totals.impostoPagarCofins ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`IMPOSTO A PAGAR - IPI;${(totals.impostoPagarIpi ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`IMPOSTO A PAGAR - ISS;${(totals.impostoPagarIss ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`TOTAL IMPOSTO A PAGAR;${(totals.totalImpostoAPagar ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`ISS A PAGAR;${(totals.issAPagar ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
-        csvRows.push(`TOTAL PAGAR;${(totals.totalPagar ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                    const findElementText = (parent, tagName, useNS = true) => {
+                        const element = findElement(parent, tagName, useNS);
+                        return element ? element.textContent : '';
+                    };
 
-
-        const csvString = csvRows.join('\n');
-        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.setAttribute('href', url);
-        a.setAttribute('download', 'relatorio_fiscal_manual.csv');
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        showMessageFiscal("Relatório Fiscal baixado com sucesso!", "success");
-    };
-
-    // Removida a função generateFinalReport
-    // Removida a lista COMPANIES, pois não é mais necessária
-
-    return (
-        <div className="p-6 bg-white rounded-lg shadow-md">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6">Relatório Fiscal (Preenchimento Manual)</h2>
-
-            <MessageBox message={message} type={messageType} />
-
-            <div className="mt-8">
-                <h3 className="text-xl font-semibold text-gray-700 mb-4">Dados da Planilha</h3>
-                <div className="overflow-x-auto rounded-xl shadow-md">
-                    <table className="min-w-full bg-white border border-gray-200">
-                        <thead>
-                            <tr>
-                                <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Item</th>
-                                {/* Renderiza os cabeçalhos das colunas de entrada */}
-                                {FISCAL_REPORT_INPUT_COLUMNS.map(col => (
-                                    <th key={col.id} className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">
-                                        {col.label}
-                                    </th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {FISCAL_REPORT_DEFINITIONS.map(def => (
-                                <tr key={def.id} className="text-sm text-gray-700">
-                                    <td className="py-2 px-4 border-b border-gray-200 font-semibold text-left">
-                                        {def.label}
-                                    </td>
-                                    {def.fields.map(field => (
-                                        <td key={`${def.id}-${field.id}`} className="py-2 px-4 border-b border-gray-200">
-                                            {field.isFormula ? (
-                                                <span className="block w-full text-center font-semibold text-gray-800">
-                                                    {typeof reportRows[def.id][field.id] === 'number' ? reportRows[def.id][field.id].toFixed(2) : reportRows[def.id][field.id]}
-                                                </span>
-                                            ) : (
-                                                <input
-                                                    type={field.type}
-                                                    name={field.id}
-                                                    value={reportRows[def.id][field.id]}
-                                                    onChange={(e) => handleRowEdit(def.id, e.target.name, e.target.value, e.target.type)}
-                                                    className="w-full bg-transparent border-none focus:outline-none text-center"
-                                                    step={field.type === 'number' ? "0.01" : undefined}
-                                                />
-                                            )}
-                                        </td>
-                                    ))}
-                                </tr>
-                            ))}
-                            {/* Linha de Totais Gerais da Planilha */}
-                            <tr className="total-row">
-                                <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">TOTAIS GERAIS:</td>
-                                {(() => {
-                                    const overallTotals = calculateOverallTotals(reportRows); // Calcula os totais uma vez
-                                    return FISCAL_REPORT_INPUT_COLUMNS.map(col => {
-                                        const totalValue = overallTotals[col.id];
-                                        return (
-                                            <td key={`total-general-${col.id}`} className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">
-                                                {typeof totalValue === 'number' ? totalValue.toFixed(2) : ''}
-                                            </td>
-                                        );
+                    const findElements = (parent, tagName, useNS = true) => {
+                        const tagParts = tagName.split('>').map(part => part.trim());
+                        let currentElements = [parent];
+                        for (let i = 0; i < tagParts.length; i++) {
+                            const nextElements = [];
+                            const currentTagName = tagParts[i];
+                            currentElements.forEach(elem => {
+                                if (elem) {
+                                    let elements;
+                                    if (useNS) {
+                                        elements = elem.getElementsByTagNameNS(NS, currentTagName);
+                                    } else {
+                                        elements = elem.getElementsByTagName(currentTagName);
+                                    }
+                                    Array.from(elements).forEach(child => {
+                                        nextElements.push(child);
                                     });
-                                })()}
-                            </tr>
-                            {/* Linhas de totais específicos (IMPOSTO A PAGAR, TOTAL VENDAS, etc.) */}
-                            {(() => {
-                                const overallTotals = calculateOverallTotals(reportRows); // Calcula os totais uma vez
-                                return (
-                                    <>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">TOTAL VENDAS:</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.totalVendas ?? 0).toFixed(2)}</td>
-                                            {/* Preenche as células restantes com vazias para alinhar */}
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`total-vendas-empty-${i}`}></td>)}
+                                }
+                            });
+                            currentElements = nextElements;
+                        }
+                        return currentElements;
+                    };
+
+                    // Tenta encontrar infNFe com namespace, se falhar, tenta sem namespace
+                    let infNFe = xmlDoc.getElementsByTagNameNS(NS, 'infNFe')[0];
+                    if (!infNFe) {
+                        infNFe = xmlDoc.getElementsByTagName('infNFe')[0]; // Fallback without namespace
+                        if (!infNFe) {
+                            throw new Error("Elemento infNFe não encontrado no XML.");
+                        }
+                    }
+
+                    const nNF = findElementText(infNFe, 'nNF', true) || findElementText(infNFe, 'nNF', false);
+                    const emit = findElement(infNFe, 'emit', true) || findElement(infNFe, 'emit', false);
+                    if (!emit) throw new Error("Elemento emit não encontrado.");
+
+                    const uf_emitente = findElementText(emit, 'enderEmit > UF', true) || findElementText(emit, 'enderEmit > UF', false);
+                    const cnpj_emitente = emit.getElementsByTagNameNS(NS, 'CNPJ')[0]?.textContent || emit.getElementsByTagName('CNPJ')[0]?.textContent || '';
+                    const dhEmi_raw = findElementText(infNFe, 'dhEmi', true) || findElementText(infNFe, 'dhEmi', false);
+
+                    if (!nNF || !uf_emitente || !cnpj_emitente || !dhEmi_raw) {
+                        throw new Error("Dados essenciais (Nº NF-e, UF, CNPJ, Data Emissão) não encontrados.");
+                    }
+
+                    const data_emissao = new Date(dhEmi_raw.substring(0, 10));
+
+                    let valor_mercadoria = 0;
+                    const vProdElements = findElements(infNFe, 'det > prod > vProd', true) || findElements(infNFe, 'det > prod > vProd', false);
+                    vProdElements.forEach(v => {
+                        valor_mercadoria += parseFloat(v.textContent || '0');
+                    });
+
+                    const frete = parseFloat(findElementText(infNFe, 'transp > vFrete', true) || findElementText(infNFe, 'transp > vFrete', false) || '0');
+                    const ipi = parseFloat(findElementText(infNFe, 'total > ICMSTot > vIPI', true) || findElementText(infNFe, 'total > ICMSTot > vIPI', false) || '0');
+                    const icms_destacado = parseFloat(findElementText(infNFe, 'total > ICMSTot > vICMS', true) || findElementText(infNFe, 'total > ICMSTot > vICMS', false) || '0');
+                    const icms_st = parseFloat(findElementText(infNFe, 'total > ICMSTot > vICMSST', true) || findElementText(infNFe, 'total > ICMSTot > vICMSST', false) || '0');
+
+                    let valor_reducao_bc = 0;
+                    const detElements = findElements(infNFe, 'det', true) || findElements(infNFe, 'det', false);
+                    detElements.forEach(det => {
+                        const icmsNodes = det.getElementsByTagNameNS(NS, 'ICMS');
+                        const icmsNodesNoNS = det.getElementsByTagName('ICMS');
+                        const relevantIcmsNodes = icmsNodes.length > 0 ? icmsNodes : icmsNodesNoNS;
+
+                        if (relevantIcmsNodes.length > 0) {
+                            const icmsNode = relevantIcmsNodes[0];
+                            const icmsSubTypes = ['ICMS00', 'ICMS10', 'ICMS20', 'ICMS30', 'ICMS40', 'ICMS51', 'ICMS60', 'ICMS70', 'ICMS90'];
+                            for (const subType of icmsSubTypes) {
+                                let specificIcmsNode = icmsNode.getElementsByTagNameNS(NS, subType)[0];
+                                if (!specificIcmsNode) {
+                                    specificIcmsNode = icmsNode.getElementsByTagName(subType)[0]; // Fallback without namespace
+                                }
+
+                                if (specificIcmsNode) {
+                                    const pRedBC = parseFloat(findElementText(specificIcmsNode, 'pRedBC', true) || findElementText(specificIcmsNode, 'pRedBC', false) || '0');
+                                    const vBC = parseFloat(findElementText(specificIcmsNode, 'vBC', true) || findElementText(specificIcmsNode, 'vBC', false) || '0');
+                                    if (pRedBC > 0 && vBC > 0) {
+                                        const vBCRed = parseFloat(findElementText(specificIcmsNode, 'vBCRed', true) || findElementText(specificIcmsNode, 'vBCRed', false) || '0');
+                                        if (vBCRed > 0) {
+                                            valor_reducao_bc += (vBC - vBCRed);
+                                        } else {
+                                            valor_reducao_bc += (vBC * (pRedBC / 100));
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    const aliquota = ALIQUOTAS_UF[uf_emitente] || 0.18;
+                    const base_calculo = valor_mercadoria + frete + ipi;
+                    const icms_interno = base_calculo * aliquota;
+                    const dae_recolher = icms_interno - icms_destacado;
+
+                    // Grupo Mercadoria - Placeholder. Personalize esta lógica conforme a estrutura do seu XML.
+                    // Exemplo: const grupoMercadoria = findElementText(det, 'prod > NCM');
+                    const grupo_mercadoria = '';
+
+                    // Determina o Tipo de Tributação para agrupamento
+                    let tipo_tributacao = "Outros";
+                    if (icms_st > 0) {
+                        tipo_tributacao = "Substituição Tributária";
+                    } else if (dae_recolher > 0) {
+                        tipo_tributacao = "Antecipação";
+                    }
+
+                    return {
+                        'Data Emissão': data_emissao.toLocaleDateString('pt-BR'),
+                        'Data Emissão Sort': data_emissao.getTime(),
+                        'Nº NF-e': nNF,
+                        'CNPJ Emitente': cnpj_emitente,
+                        'Estado': uf_emitente,
+                        'Grupo Mercadoria': grupo_mercadoria,
+                        'Tipo Tributação': tipo_tributacao,
+                        'Valor Mercadoria': valor_mercadoria,
+                        'Frete': frete,
+                        'IPI': ipi,
+                        'ICMS Destacado': icms_destacado,
+                        'ICMS ST': icms_st,
+                        'Alíquota Interna': `${(aliquota * 100).toFixed(0)}%`,
+                        'Base de Cálculo': base_calculo,
+                        'Valor Redução BC': valor_reducao_bc,
+                        'ICMS Interno': icms_interno,
+                        'DAE a Recolher': dae_recolher
+                    };
+
+                } catch (e) {
+                    console.error(`Erro ao processar ${fileName}:`, e);
+                    showMessage(`Erro ao processar ${fileName}: ${e.message}`, 'error');
+                    return null;
+                }
+            };
+
+            /**
+             * Lida com o processamento dos arquivos XML selecionados.
+             */
+            const handleProcessFiles = async () => {
+                clearMessage();
+                if (selectedFiles.length === 0) {
+                    showMessage("Por favor, selecione pelo menos um arquivo XML.", "warning");
+                    return;
+                }
+
+                const processed = [];
+                let errorsCount = 0;
+
+                for (const file of selectedFiles) {
+                    const reader = new FileReader();
+                    await new Promise((resolve) => {
+                        reader.onload = (e) => {
+                            const xmlString = e.target.result;
+                            const result = processXmlFile(xmlString, file.name);
+                            if (result) {
+                                processed.push(result);
+                            } else {
+                                errorsCount++;
+                            }
+                            resolve();
+                        };
+                        reader.onerror = () => {
+                            showMessage(`Erro ao ler o arquivo: ${file.name}`, 'error');
+                            errorsCount++;
+                            resolve();
+                        };
+                        reader.readAsText(file);
+                    });
+                }
+
+                if (processed.length === 0) {
+                    showMessage("Nenhum XML válido foi encontrado ou processado com sucesso.", "warning");
+                    setReportData([]);
+                    return;
+                }
+
+                // Ordena os dados para agrupamento: Tipo Tributação, CNPJ, Estado, Data Emissão
+                processed.sort((a, b) => {
+                    if (a['Tipo Tributação'] !== b['Tipo Tributação']) {
+                        return a['Tipo Tributação'].localeCompare(b['Tipo Tributacao']);
+                    }
+                    if (a['CNPJ Emitente'] !== b['CNPJ Emitente']) {
+                        return a['CNPJ Emitente'].localeCompare(b['CNPJ Emitente']);
+                    }
+                    if (a['Estado'] !== b['Estado']) {
+                        return a['Estado'].localeCompare(b['Estado']);
+                    }
+                    return a['Data Emissão Sort'] - b['Data Emissão Sort'];
+                });
+
+                // Calcula os totais e adiciona as linhas de agrupamento
+                const finalData = [];
+                let currentTipoTributacao = null;
+                let currentCnpj = null;
+                let currentEstado = null;
+
+                const createTotalObject = () => ({
+                    'Valor Mercadoria': 0, 'Frete': 0, 'IPI': 0, 'ICMS Destacado': 0, 'ICMS ST': 0,
+                    'Base de Cálculo': 0, 'Valor Redução BC': 0, 'ICMS Interno': 0, 'DAE a Recolher': 0
+                });
+
+                let subtotalTipoTributacao = createTotalObject();
+                let subtotalCnpj = createTotalObject();
+                let subtotalEstado = createTotalObject();
+                let grandTotal = createTotalObject();
+
+                const addSubtotalRow = (type, values, label) => {
+                    const row = {
+                        'Data Emissão': '', 'Nº NF-e': '', 'CNPJ Emitente': '', 'Estado': '', 'Grupo Mercadoria': '',
+                        'Tipo Tributação': '', // Empty for subtotal rows
+                        'Valor Mercadoria': values['Valor Mercadoria'],
+                        'Frete': values['Frete'],
+                        'IPI': values['IPI'],
+                        'ICMS Destacado': values['ICMS Destacado'],
+                        'ICMS ST': values['ICMS ST'],
+                        'Alíquota Interna': '',
+                        'Base de Cálculo': values['Base de Cálculo'],
+                        'Valor Redução BC': values['Valor Redução BC'],
+                        'ICMS Interno': label, // Store label here for subtotal rows
+                        'DAE a Recolher': values['DAE a Recolher']
+                    };
+                    finalData.push({ type: 'subtotal', data: row, label: label });
+                };
+
+                processed.forEach((rowData, index) => {
+                    // Verifica mudança de Tipo Tributação
+                    if (rowData['Tipo Tributação'] !== currentTipoTributacao) {
+                        if (currentTipoTributacao !== null) {
+                            if (currentEstado !== null) {
+                                addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
+                                Object.assign(subtotalEstado, createTotalObject());
+                            }
+                            if (currentCnpj !== null) {
+                                addSubtotalRow('cnpj', subtotalCnpj, `Subtotal CNPJ ${currentCnpj}:`);
+                                Object.assign(subtotalCnpj, createTotalObject());
+                            }
+                            addSubtotalRow('tipoTributacao', subtotalTipoTributacao, `Subtotal ${currentTipoTributacao}:`);
+                            Object.assign(subtotalTipoTributacao, createTotalObject());
+                        }
+                        finalData.push({ type: 'group-header', label: `Tipo de Tributação: ${rowData['Tipo Tributação']}` });
+                        currentTipoTributacao = rowData['Tipo Tributação'];
+                        currentCnpj = null;
+                        currentEstado = null;
+                    }
+
+                    // Verifica mudança de CNPJ
+                    if (rowData['CNPJ Emitente'] !== currentCnpj) {
+                        if (currentCnpj !== null) {
+                            if (currentEstado !== null) {
+                                addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
+                                Object.assign(subtotalEstado, createTotalObject());
+                            }
+                            addSubtotalRow('cnpj', subtotalCnpj, `Subtotal CNPJ ${currentCnpj}:`);
+                            Object.assign(subtotalCnpj, createTotalObject());
+                        }
+                        finalData.push({ type: 'group-header', label: `CNPJ: ${rowData['CNPJ Emitente']}` });
+                        currentCnpj = rowData['CNPJ Emitente'];
+                        currentEstado = null;
+                    }
+
+                    // Verifica mudança de Estado dentro do mesmo CNPJ
+                    if (rowData['Estado'] !== currentEstado) {
+                        if (currentEstado !== null) {
+                            addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
+                            Object.assign(subtotalEstado, createTotalObject());
+                        }
+                        finalData.push({ type: 'group-header', label: `Estado: ${rowData['Estado']}` });
+                        currentEstado = rowData['Estado'];
+                    }
+
+                    finalData.push({ type: 'data', data: rowData });
+
+                    // Acumula os totais
+                    Object.keys(subtotalTipoTributacao).forEach(key => { subtotalTipoTributacao[key] += rowData[key]; });
+                    Object.keys(subtotalCnpj).forEach(key => { subtotalCnpj[key] += rowData[key]; });
+                    Object.keys(subtotalEstado).forEach(key => { subtotalEstado[key] += rowData[key]; });
+                    Object.keys(grandTotal).forEach(key => { grandTotal[key] += rowData[key]; });
+                });
+
+                // Adiciona os últimos subtotais de Estado, CNPJ e Tipo Tributação
+                if (currentEstado !== null) {
+                    addSubtotalRow('estado', subtotalEstado, `Subtotal Estado ${currentEstado}:`);
+                }
+                if (currentCnpj !== null) {
+                    addSubtotalRow('cnpj', subtotalCnpj, `Subtotal CNPJ ${currentCnpj}:`);
+                }
+                if (currentTipoTributacao !== null) {
+                    addSubtotalRow('tipoTributacao', subtotalTipoTributacao, `Subtotal ${currentTipoTributacao}:`);
+                }
+
+                // Adiciona o total geral
+                addSubtotalRow('total', grandTotal, 'TOTAL GERAL:');
+
+                setReportData(finalData);
+                showMessage(`Processamento concluído. ${processed.length} arquivos processados com sucesso. ${errorsCount} erros.`, 'success');
+            };
+
+            /**
+             * Gera e baixa um arquivo CSV com base nos dados fornecidos, incluindo subtotais.
+             */
+            const downloadCsv = () => {
+                if (reportData.length === 0) {
+                    showMessage("Não há dados para baixar.", "warning");
+                    return;
+                }
+
+                const headers = [
+                    'Data Emissão', 'Nº NF-e', 'CNPJ Emitente', 'Estado', 'Grupo Mercadoria', 'Tipo Tributação',
+                    'Valor Mercadoria', 'Frete', 'IPI', 'ICMS Destacado', 'ICMS ST',
+                    'Alíquota Interna', 'Base de Cálculo', 'Valor Redução BC', 'ICMS Interno', 'DAE a Recolher'
+                ];
+                const csvRows = [];
+                csvRows.push(headers.join(';')); // Cabeçalho CSV
+
+                reportData.forEach(item => {
+                    if (item.type === 'data' || item.type === 'subtotal' || item.type === 'total') {
+                        const rowData = item.data;
+                        const values = headers.map(header => {
+                            let value = rowData[header];
+                            // Special handling for 'ICMS Interno' if it's a label string
+                            if (header === 'ICMS Interno' && (item.type === 'subtotal' || item.type === 'total')) {
+                                value = item.label; // Use the label directly
+                            } else if (typeof value === 'number') {
+                                value = value.toFixed(2);
+                            }
+                            const escapedValue = ('' + value).replace(/"/g, '""');
+                            return (escapedValue.includes(';') || escapedValue.includes('"')) ? `"${escapedValue}"` : escapedValue;
+                        });
+                        csvRows.push(values.join(';'));
+                    } else if (item.type === 'group-header') {
+                        // For group headers, add a row with just the label in the first column
+                        const emptyCells = Array(headers.length - 1).fill('');
+                        csvRows.push(`${item.label};${emptyCells.join(';')}`);
+                    }
+                });
+
+                const csvString = csvRows.join('\n');
+                const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.setAttribute('href', url);
+                a.setAttribute('download', 'relatorio_dae_agrupado.csv');
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            return (
+                <div className="p-6 bg-white rounded-lg shadow-md">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-6">Gerador de Relatório DAE</h2>
+
+                    <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mb-4">
+                        <div className="relative inline-block overflow-hidden cursor-pointer bg-blue-500 hover:bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold transition duration-200">
+                            Selecionar Arquivos XML
+                            <input type="file" id="xmlFileInput" multiple accept=".xml" className="absolute left-0 top-0 opacity-0 cursor-pointer w-full h-full" onChange={handleFileChange} />
+                        </div>
+                        <button
+                            onClick={handleProcessFiles}
+                            className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out"
+                        >
+                            Processar e Gerar Relatório
+                        </button>
+                    </div>
+
+                    <MessageBox message={message} type={messageType} />
+
+                    {reportData.length > 0 && (
+                        <div className="mt-8">
+                            <h3 className="text-xl font-semibold text-gray-700 mb-4">Relatório de DAE</h3>
+                            <div className="overflow-x-auto rounded-xl shadow-md">
+                                <table className="min-w-full bg-white border border-gray-200">
+                                    <thead>
+                                        <tr>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Data Emissão</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Nº NF-e</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">CNPJ Emitente</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Estado</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Grupo Mercadoria</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Tipo Tributação</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Valor Mercadoria</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Frete</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">IPI</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">ICMS Destacado</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">ICMS ST</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Alíquota Interna</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Base de Cálculo</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Valor Redução BC</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">ICMS Interno</th>
+                                            <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">DAE a Recolher</th>
                                         </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - ICMS:</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarIcms ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-icms-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - PIS:</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarPis ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-pis-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - COFINS:</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarCofins ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-cofins-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - IPI:</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarIpi ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-ipi-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - ISS:</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarIss ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-iss-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">TOTAL IMPOSTO A PAGAR:</td>
-                                            <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{(overallTotals.totalImpostoAPagar ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`total-imposto-pagar-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">ISS A PAGAR:</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.issAPagar ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`iss-a-pagar-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">TOTAL PAGAR:</td>
-                                            <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{(overallTotals.totalPagar ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`total-pagar-empty-${i}`}></td>)}
-                                        </tr>
-                                        <tr className="total-row">
-                                            <td className="py-2 px-4 text-right font-bold">Lucro Líquido (Simpl.):</td>
-                                            <td className="py-2 px-4 text-right font-bold">{(overallTotals.lucroLiquidoSimplificado ?? 0).toFixed(2)}</td>
-                                            {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`lucro-liquido-empty-${i}`}></td>)}
-                                        </tr>
-                                    </>
-                                );
-                            })()}
-                        </tbody>
-                    </table>
+                                    </thead>
+                                    <tbody>
+                                        {reportData.map((item, index) => {
+                                            if (item.type === 'group-header') {
+                                                return (
+                                                    <tr key={`group-${index}`} className="group-header">
+                                                        <td colSpan="16" className="py-2 px-4 text-left font-bold bg-blue-100 text-blue-800">
+                                                            {item.label}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            } else if (item.type === 'subtotal') {
+                                                const rowData = item.data;
+                                                return (
+                                                    <tr key={`subtotal-${index}`} className="subtotal-row">
+                                                        <td colSpan="6" className="py-2 px-4 text-right font-bold border-t-2 border-green-400">
+                                                            {item.label}
+                                                        </td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Valor Mercadoria'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Frete'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['IPI'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['ICMS Destacado'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['ICMS ST'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400"></td> {/* Alíquota Interna */}
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Base de Cálculo'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['Valor Redução BC'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['ICMS Interno']}</td> {/* Display label directly for subtotal */}
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-green-400">{rowData['DAE a Recolher'].toFixed(2)}</td>
+                                                    </tr>
+                                                );
+                                            } else if (item.type === 'total') {
+                                                const rowData = item.data;
+                                                return (
+                                                    <tr key={`total-${index}`} className="total-row">
+                                                        <td colSpan="6" className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">
+                                                            {item.label}
+                                                        </td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Valor Mercadoria'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Frete'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['IPI'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['ICMS Destacado'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['ICMS ST'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400"></td> {/* Alíquota Interna */}
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Base de Cálculo'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['Valor Redução BC'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['ICMS Interno']}</td> {/* Display label directly for total */}
+                                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{rowData['DAE a Recolher'].toFixed(2)}</td>
+                                                    </tr>
+                                                );
+                                            } else {
+                                                const rowData = item.data;
+                                                return (
+                                                    <tr key={`data-${index}`} className="text-sm text-gray-700">
+                                                        <td className="py-2 px-4 border-b border-gray-200">{rowData['Data Emissão']}</td>
+                                                        <td className="py-2 px-4 border-b border-gray-200">{rowData['Nº NF-e']}</td>
+                                                        <td className="py-2 px-4 border-b border-gray-200">{rowData['CNPJ Emitente']}</td>
+                                                        <td className="py-2 px-4 border-b border-gray-200">{rowData['Estado']}</td>
+                                                        <td className="py-2 px-4 border-b border-gray-200">{rowData['Grupo Mercadoria']}</td>
+                                                        <td className="py-2 px-4 border-b border-gray-200">{rowData['Tipo Tributação']}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Valor Mercadoria'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Frete'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['IPI'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['ICMS Destacado'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['ICMS ST'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Alíquota Interna']}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Base de Cálculo'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['Valor Redução BC'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['ICMS Interno'].toFixed(2)}</td>
+                                                        <td className="py-2 px-4 text-right border-b border-gray-200">{rowData['DAE a Recolher'].toFixed(2)}</td>
+                                                    </tr>
+                                                );
+                                            }
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="flex justify-center mt-6">
+                                <button onClick={downloadCsv} className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out">
+                                    Baixar como CSV
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
-                <div className="flex justify-center mt-6">
-                    <button onClick={downloadCsv} className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out">
-                        Baixar Relatório Fiscal (CSV)
-                    </button>
+            );
+        };
+
+        /**
+         * Componente para o Relatório Fiscal com preenchimento manual.
+         */
+        const FiscalReport = () => {
+            // Taxas de PIS e COFINS conforme o HTML fornecido
+            const PIS_RATE = 0.0165;
+            const COFINS_RATE = 0.076;
+
+            // Define a estrutura para cada categoria de linha no relatório fiscal
+            const FISCAL_REPORT_DEFINITIONS = [
+                { id: 'comprasC_ICMS', label: 'COMPRAS C/ICMS', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 26079.71 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 430.32 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 1982.06 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 564.64 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'comprasS_ICMS', label: 'COMPRAS S/ICMS', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 174313.36 },
+                    { id: 'outrosCreditos', label: 'IPI SALDO ANTERIOR (Col. H)', type: 'text', initialValue: 'IPI SALDO ANTERIOR' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'armazenagem', label: 'ARMAZENAGEM', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'aluguelImovel', label: 'ALUGUEL IMÓVEL', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 50000.00 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'aluguelMaquinas', label: 'ALUGUEL MÁQUINAS', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'saldoCredorAnter', label: 'SALDO CREDOR ANTER', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 17215.00 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 79293.32 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'incentivo', label: 'INCENTIVO', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 18064.33 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'icmsFronteira', label: 'ICMS FRONTEIRA', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'notaAcrescimo', label: 'NOTA ACRESCIMO', isFormulaRow: true, fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', isFormula: true, initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'text', initialValue: '' },
+                ]},
+                { id: 'vendasS_ICMS', label: 'VENDAS S/ICMS', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'text', initialValue: 'IPI' },
+                    { id: 'outrosCreditos', label: 'ISS (Col. H)', type: 'text', initialValue: 'ISS' },
+                    { id: 'iss', label: 'ISS RETIDO (Col. I)', type: 'text', initialValue: 'ISS RETIDO' },
+                ]},
+                { id: 'vendasC_ICMS', label: 'VENDAS C/ICMS', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 223197.55 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 24507.41 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 3682.76 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 16963.01 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 9393.07 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'text', initialValue: '' },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'number', initialValue: 0 },
+                ]},
+                { id: 'servicos', label: 'SERVIÇOS', fields: [
+                    { id: 'valor1', label: 'Valor (Col. B)', type: 'number', initialValue: 0 },
+                    { id: 'valor2', label: 'Valor (Col. C)', type: 'number', initialValue: 0 },
+                    { id: 'icms', label: 'ICMS', type: 'number', initialValue: 0 },
+                    { id: 'pis', label: 'PIS', type: 'number', initialValue: 0 },
+                    { id: 'cofins', label: 'COFINS', type: 'number', initialValue: 0 },
+                    { id: 'ipi', label: 'IPI', type: 'number', initialValue: 0 },
+                    { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'number', initialValue: 0 },
+                    { id: 'iss', label: 'ISS (Col. I)', type: 'number', initialValue: 0 },
+                ]},
+            ];
+
+            // Define as colunas que terão campos de entrada para cada categoria de linha
+            const FISCAL_REPORT_INPUT_COLUMNS = [
+                { id: 'valor1', label: 'Valor (Col. B)', type: 'number' },
+                { id: 'valor2', label: 'Valor (Col. C)', type: 'number' },
+                { id: 'icms', label: 'ICMS', type: 'number' },
+                { id: 'pis', label: 'PIS', type: 'number' },
+                { id: 'cofins', label: 'COFINS', type: 'number' },
+                { id: 'ipi', label: 'IPI', type: 'number' },
+                { id: 'outrosCreditos', label: 'Outros Créditos (Col. H)', type: 'number' },
+                { id: 'iss', label: 'ISS (Col. I)', type: 'number' },
+            ];
+
+            // Inicializa o estado das linhas do relatório com valores padrão
+            const initialReportRows = {};
+            FISCAL_REPORT_DEFINITIONS.forEach(def => {
+                const rowData = {};
+                def.fields.forEach(field => {
+                    rowData[field.id] = field.initialValue !== undefined ? field.initialValue : (field.type === 'number' ? 0 : '');
+                });
+                initialReportRows[def.id] = rowData;
+            });
+
+            const [reportRows, setReportRows] = React.useState(initialReportRows);
+            const [message, setMessage] = React.useState('');
+            const [messageType, setMessageType] = React.useState('');
+
+            /**
+             * Exibe uma mensagem na caixa de mensagens da interface.
+             * @param {string} msg - A mensagem a ser exibida.
+             * @param {'success'|'warning'|'error'|'info'} type - O tipo da mensagem (para estilização).
+             */
+            const showMessageFiscal = (msg, type) => {
+                setMessage(msg);
+                setMessageType(type);
+            };
+
+            /**
+             * Limpa a caixa de mensagens.
+             */
+            const clearMessageFiscal = () => {
+                setMessage('');
+                setMessageType('');
+            };
+
+            /**
+             * Calcula as fórmulas para uma linha específica.
+             * @param {string} rowId - O ID da linha.
+             * @param {Object} rowData - Os dados da linha.
+             * @param {Object} allRows - Todos os dados das linhas para referências cruzadas.
+             * @returns {Object} A linha com as fórmulas calculadas.
+             */
+            const calculateSpecificRowFormulas = (rowId, rowData, allRows) => {
+                const updatedRowData = { ...rowData };
+
+                // FÓRMULAS ESPECÍFICAS POR LINHA
+                if (rowId === 'aluguelImovel') {
+                    updatedRowData.pis = (updatedRowData.valor1 ?? 0) * PIS_RATE;
+                    updatedRowData.cofins = (updatedRowData.valor1 ?? 0) * COFINS_RATE;
+                } else if (rowId === 'notaAcrescimo') {
+                    const comprasCIcmsPis = allRows.comprasC_ICMS?.pis ?? 0;
+                    const saldoCredorAnterPis = allRows.saldoCredorAnter?.pis ?? 0;
+                    const aluguelImovelPis = allRows.aluguelImovel?.pis ?? 0;
+                    updatedRowData.pis = comprasCIcmsPis + saldoCredorAnterPis + aluguelImovelPis;
+
+                    const comprasCIcmsCofins = allRows.comprasC_ICMS?.cofins ?? 0;
+                    const saldoCredorAnterCofins = allRows.saldoCredorAnter?.cofins ?? 0;
+                    const aluguelImovelCofins = allRows.aluguelImovel?.cofins ?? 0;
+                    updatedRowData.cofins = comprasCIcmsCofins + saldoCredorAnterCofins + aluguelImovelCofins;
+
+                    const comprasCIcmsIpi = allRows.comprasC_ICMS?.ipi ?? 0;
+                    const comprasSIcmsIpi = allRows.comprasS_ICMS?.ipi ?? 0;
+                    updatedRowData.ipi = comprasCIcmsIpi + comprasSIcmsIpi;
+
+                    updatedRowData.icms = allRows.incentivo?.icms ?? 0;
+                }
+                return updatedRowData;
+            };
+
+            /**
+             * Lida com a mudança nos campos de uma linha existente.
+             * Recalcula as fórmulas para a linha editada.
+             * @param {string} rowId - O ID da linha sendo editada.
+             * @param {string} name - O nome do campo.
+             * @param {string} value - O novo valor do campo.
+             * @param {string} type - O tipo do input (para conversão de valor).
+             */
+            const handleRowEdit = (rowId, name, value, type) => {
+                setReportRows(prevRows => {
+                    const updatedRows = { ...prevRows };
+                    let newRowData = {
+                        ...updatedRows[rowId],
+                        [name]: type === 'number' ? parseFloat(value) || 0 : value
+                    };
+
+                    newRowData = calculateSpecificRowFormulas(rowId, newRowData, updatedRows);
+
+                    updatedRows[rowId] = newRowData;
+
+                    const rowsToRecalculate = ['notaAcrescimo'];
+                    rowsToRecalculate.forEach(dependentRowId => {
+                        if (updatedRows[dependentRowId]) {
+                            updatedRows[dependentRowId] = calculateSpecificRowFormulas(dependentRowId, updatedRows[dependentRowId], updatedRows);
+                        }
+                    });
+
+                    return updatedRows;
+                });
+            };
+
+            // Efeito para recalcular todas as fórmulas ao carregar ou quando as dependências mudam
+            React.useEffect(() => {
+                setReportRows(prevRows => {
+                    const updatedRows = { ...prevRows };
+                    FISCAL_REPORT_DEFINITIONS.forEach(def => {
+                        if (def.isFormulaRow) {
+                            updatedRows[def.id] = calculateSpecificRowFormulas(def.id, updatedRows[def.id], updatedRows);
+                        }
+                    });
+                    return updatedRows;
+                });
+            }, []);
+
+
+            /**
+             * Calcula os totais das colunas numéricas para a linha de totais.
+             * @param {Object} currentReportRows - O estado atual das linhas do relatório.
+             */
+            const calculateOverallTotals = (currentReportRows) => {
+                const totals = FISCAL_REPORT_INPUT_COLUMNS.reduce((acc, col) => {
+                    acc[col.id] = 0;
+                    return acc;
+                }, {});
+
+                totals.totalVendas = 0;
+                totals.impostoPagarIcms = 0;
+                totals.impostoPagarPis = 0;
+                totals.impostoPagarCofins = 0;
+                totals.impostoPagarIpi = 0;
+                totals.impostoPagarIss = 0;
+                totals.totalImpostoAPagar = 0;
+                totals.issAPagar = 0;
+                totals.totalPagar = 0;
+                totals.totalImpostosGerais = 0;
+                totals.lucroLiquidoSimplificado = 0;
+
+
+                FISCAL_REPORT_DEFINITIONS.forEach(def => {
+                    const rowData = currentReportRows[def.id];
+                    def.fields.forEach(field => {
+                        if (field.type === 'number' && typeof rowData[field.id] === 'number') {
+                            totals[field.id] += rowData[field.id];
+                        }
+                    });
+                });
+
+                // FÓRMULAS DE TOTAIS GERAIS
+                totals.totalVendas = (currentReportRows.vendasS_ICMS?.valor1 ?? 0) +
+                                      (currentReportRows.vendasC_ICMS?.valor1 ?? 0) +
+                                      (currentReportRows.servicos?.valor1 ?? 0);
+
+                totals.impostoPagarIcms = (currentReportRows.vendasC_ICMS?.icms ?? 0) - (currentReportRows.notaAcrescimo?.icms ?? 0);
+                totals.impostoPagarPis = (currentReportRows.vendasC_ICMS?.pis ?? 0) - (currentReportRows.notaAcrescimo?.pis ?? 0);
+                totals.impostoPagarCofins = (currentReportRows.vendasC_ICMS?.cofins ?? 0) - (currentReportRows.notaAcrescimo?.cofins ?? 0);
+                totals.impostoPagarIpi = (currentReportRows.vendasC_ICMS?.ipi ?? 0) - (currentReportRows.notaAcrescimo?.ipi ?? 0);
+                totals.impostoPagarIss = (currentReportRows.servicos?.iss ?? 0);
+
+                totals.totalImpostoAPagar = (totals.impostoPagarIcms ?? 0) + (totals.impostoPagarPis ?? 0) + (totals.impostoPagarCofins ?? 0) + (totals.impostoPagarIpi ?? 0) + (totals.impostoPagarIss ?? 0);
+
+                totals.issAPagar = totals.impostoPagarIss;
+
+                totals.totalPagar = totals.totalImpostoAPagar;
+
+                totals.totalImpostosGerais = (totals.icms ?? 0) + (totals.pis ?? 0) + (totals.cofins ?? 0) + (totals.ipi ?? 0) + (totals.iss ?? 0);
+
+                totals.lucroLiquidoSimplificado = (totals.totalVendas ?? 0) - (totals.totalImpostosGerais ?? 0);
+
+
+                return totals;
+            };
+
+
+            /**
+             * Gera e baixa um arquivo CSV com os dados da planilha.
+             */
+            const downloadCsv = () => {
+                if (Object.keys(reportRows).length === 0) {
+                    showMessageFiscal("Não há dados na planilha para baixar.", "warning");
+                    return;
+                }
+
+                const headers = ['Item', ...FISCAL_REPORT_INPUT_COLUMNS.map(col => col.label)];
+                const csvRows = [];
+                csvRows.push(headers.join(';'));
+
+                FISCAL_REPORT_DEFINITIONS.forEach(def => {
+                    const rowData = reportRows[def.id];
+                    const values = [
+                        def.label,
+                        ...FISCAL_REPORT_INPUT_COLUMNS.map(col => {
+                            let value = rowData[col.id];
+                            if (typeof value === 'number') {
+                                value = value.toFixed(2).replace('.', ',');
+                            }
+                            const escapedValue = ('' + value).replace(/"/g, '""');
+                            return (escapedValue.includes(';') || escapedValue.includes('"')) ? `"${escapedValue}"` : escapedValue;
+                        })
+                    ];
+                    csvRows.push(values.join(';'));
+                });
+
+                const totals = calculateOverallTotals(reportRows);
+                const totalRowValues = ['TOTAIS GERAIS:', ...FISCAL_REPORT_INPUT_COLUMNS.map(col => {
+                    const totalValue = totals[col.id];
+                    return typeof totalValue === 'number' ? totalValue.toFixed(2).replace('.', ',') : '';
+                })];
+                csvRows.push(totalRowValues.join(';'));
+
+                csvRows.push(`TOTAL VENDAS;${(totals.totalVendas ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`Total Impostos Gerais;${(totals.totalImpostosGerais ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`Lucro Líquido (Simpl.);${(totals.lucroLiquidoSimplificado ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`IMPOSTO A PAGAR - ICMS;${(totals.impostoPagarIcms ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`IMPOSTO A PAGAR - PIS;${(totals.impostoPagarPis ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`IMPOSTO A PAGAR - COFINS;${(totals.impostoPagarCofins ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`IMPOSTO A PAGAR - IPI;${(totals.impostoPagarIpi ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`IMPOSTO A PAGAR - ISS;${(totals.impostoPagarIss ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`TOTAL IMPOSTO A PAGAR;${(totals.totalImpostoAPagar ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`ISS A PAGAR;${(totals.issAPagar ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`TOTAL PAGAR;${(totals.totalPagar ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+                csvRows.push(`Lucro Líquido (Simpl.);${(totals.lucroLiquidoSimplificado ?? 0).toFixed(2).replace('.', ',')};${Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').join(';')}`);
+
+
+                const csvString = csvRows.join('\n');
+                const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.setAttribute('href', url);
+                a.setAttribute('download', 'relatorio_fiscal_manual.csv');
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                showMessageFiscal("Relatório Fiscal baixado com sucesso!", "success");
+            };
+
+            return (
+                <div className="p-6 bg-white rounded-lg shadow-md">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-6">Relatório Fiscal (Preenchimento Manual)</h2>
+
+                    <MessageBox message={message} type={messageType} />
+
+                    <div className="mt-8">
+                        <h3 className="text-xl font-semibold text-gray-700 mb-4">Dados da Planilha</h3>
+                        <div className="overflow-x-auto rounded-xl shadow-md">
+                            <table className="min-w-full bg-white border border-gray-200">
+                                <thead>
+                                    <tr>
+                                        <th className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">Item</th>
+                                        {FISCAL_REPORT_INPUT_COLUMNS.map(col => (
+                                            <th key={col.id} className="py-3 px-4 bg-gray-200 text-gray-700 font-bold text-center text-sm border-b border-gray-300">
+                                                {col.label}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {FISCAL_REPORT_DEFINITIONS.map(def => (
+                                        <tr key={def.id} className="text-sm text-gray-700">
+                                            <td className="py-2 px-4 border-b border-gray-200 font-semibold text-left">
+                                                {def.label}
+                                            </td>
+                                            {def.fields.map(field => (
+                                                <td key={`${def.id}-${field.id}`} className="py-2 px-4 border-b border-gray-200">
+                                                    {field.isFormula ? (
+                                                        <span className="block w-full text-center font-semibold text-gray-800">
+                                                            {typeof reportRows[def.id][field.id] === 'number' ? reportRows[def.id][field.id].toFixed(2) : reportRows[def.id][field.id]}
+                                                        </span>
+                                                    ) : (
+                                                        <input
+                                                            type={field.type}
+                                                            name={field.id}
+                                                            value={reportRows[def.id][field.id]}
+                                                            onChange={(e) => handleRowEdit(def.id, e.target.name, e.target.value, e.target.type)}
+                                                            className="w-full bg-transparent border-none focus:outline-none text-center"
+                                                            step={field.type === 'number' ? "0.01" : undefined}
+                                                        />
+                                                    )}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                    {/* Linha de Totais Gerais da Planilha */}
+                                    <tr className="total-row">
+                                        <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">TOTAIS GERAIS:</td>
+                                        {(() => {
+                                            const overallTotals = calculateOverallTotals(reportRows);
+                                            return FISCAL_REPORT_INPUT_COLUMNS.map(col => {
+                                                const totalValue = overallTotals[col.id];
+                                                return (
+                                                    <td key={`total-general-${col.id}`} className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">
+                                                        {typeof totalValue === 'number' ? totalValue.toFixed(2) : ''}
+                                                    </td>
+                                                );
+                                            });
+                                        })()}
+                                    </tr>
+                                    {/* Linhas de totais específicos (IMPOSTO A PAGAR, TOTAL VENDAS, etc.) */}
+                                    {(() => {
+                                        const overallTotals = calculateOverallTotals(reportRows);
+                                        return (
+                                            <>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">TOTAL VENDAS:</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.totalVendas ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`total-vendas-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - ICMS:</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarIcms ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-icms-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - PIS:</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarPis ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-pis-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - COFINS:</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarCofins ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-cofins-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - IPI:</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarIpi ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-ipi-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">IMPOSTO A PAGAR - ISS:</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.impostoPagarIss ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`imposto-iss-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">TOTAL IMPOSTO A PAGAR:</td>
+                                                    <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{(overallTotals.totalImpostoAPagar ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`total-imposto-pagar-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">ISS A PAGAR:</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.issAPagar ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`iss-a-pagar-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">TOTAL PAGAR:</td>
+                                                    <td className="py-2 px-4 text-right font-bold border-t-2 border-gray-400">{(overallTotals.totalPagar ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`total-pagar-empty-${i}`}></td>)}
+                                                </tr>
+                                                <tr className="total-row">
+                                                    <td className="py-2 px-4 text-right font-bold">Lucro Líquido (Simpl.):</td>
+                                                    <td className="py-2 px-4 text-right font-bold">{(overallTotals.lucroLiquidoSimplificado ?? 0).toFixed(2)}</td>
+                                                    {Array(FISCAL_REPORT_INPUT_COLUMNS.length - 1).fill('').map((_, i) => <td key={`lucro-liquido-empty-${i}`}></td>)}
+                                                </tr>
+                                            </>
+                                        );
+                                    })()}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="flex justify-center mt-6">
+                            <button onClick={downloadCsv} className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 ease-in-out">
+                                Baixar Relatório Fiscal (CSV)
+                            </button>
+                        </div>
+                    </div>
                 </div>
-            </div>
+            );
+        };
 
-            {/* Removido o seletor de empresa e o botão "Gerar Relatório Final" */}
-            {/* Removida a exibição de finalReportTotals */}
-        </div>
-    );
-};
+        /**
+         * Componente principal da aplicação com abas.
+         */
+        const App = () => {
+            const [activeTab, setActiveTab] = React.useState('fiscal'); // 'dae' ou 'fiscal'
 
-/**
- * Componente principal da aplicação com abas.
- */
-const App = () => {
-    const [activeTab, setActiveTab] = useState('fiscal'); // 'dae' ou 'fiscal'
+            return (
+                <div className="min-h-screen bg-gray-100 flex flex-col items-center p-8">
+                    <div className="w-full max-w-4xl bg-white rounded-lg shadow-xl">
+                        {/* Navegação por abas */}
+                        <div className="flex border-b border-gray-200">
+                            <button
+                                className={`py-4 px-6 text-lg font-semibold rounded-tl-lg transition-colors duration-200
+                                    ${activeTab === 'dae' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}
+                                `}
+                                onClick={() => setActiveTab('dae')}
+                            >
+                                Gerador de Relatório DAE
+                            </button>
+                            <button
+                                className={`py-4 px-6 text-lg font-semibold rounded-tr-lg transition-colors duration-200
+                                    ${activeTab === 'fiscal' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}
+                                `}
+                                onClick={() => setActiveTab('fiscal')}
+                            >
+                                Relatório Fiscal
+                            </button>
+                        </div>
 
-    return (
-        <div className="min-h-screen bg-gray-100 flex flex-col items-center p-8">
-            <div className="w-full max-w-4xl bg-white rounded-lg shadow-xl">
-                {/* Navegação por abas */}
-                <div className="flex border-b border-gray-200">
-                    <button
-                        className={`py-4 px-6 text-lg font-semibold rounded-tl-lg transition-colors duration-200
-                            ${activeTab === 'dae' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}
-                        `}
-                        onClick={() => setActiveTab('dae')}
-                    >
-                        Gerador de Relatório DAE
-                    </button>
-                    <button
-                        className={`py-4 px-6 text-lg font-semibold rounded-tr-lg transition-colors duration-200
-                            ${activeTab === 'fiscal' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}
-                        `}
-                        onClick={() => setActiveTab('fiscal')}
-                    >
-                        Relatório Fiscal
-                    </button>
+                        {/* Conteúdo das abas */}
+                        <div className="p-6">
+                            {activeTab === 'dae' && <DAEReportGenerator />}
+                            {activeTab === 'fiscal' && <FiscalReport />}
+                        </div>
+                    </div>
                 </div>
+            );
+        };
 
-                {/* Conteúdo das abas */}
-                <div className="p-6">
-                    {activeTab === 'dae' && <DAEReportGenerator />}
-                    {activeTab === 'fiscal' && <FiscalReport />}
-                </div>
-            </div>
-        </div>
-    );
-};
-
-export default App;
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
