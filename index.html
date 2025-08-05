@@ -7,24 +7,125 @@
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- jsPDF e html2canvas CDNs para geração de PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Importar as funções necessárias do SDK do Firebase (sem autenticação)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+        import { getFirestore, doc, setDoc, getDoc, collection } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+
+        // Sua configuração do Firebase (apenas para inicializar o app, autenticação não será usada)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDm09EA2D0HhRHn0Pf50jQlc-d_GOaLT1Q",
+            authDomain: "relatorios-fiscal.firebaseapp.com",
+            projectId: "relatorios-fiscal",
+            storageBucket: "relatorios-fiscal.firebasestorage.app",
+            messagingSenderId: "976827194670",
+            appId: "1:976827194670:web:068eaa1ebbcaa189076ebf",
+            measurementId: "G-WBXYWK837J"
+        };
+        console.log("Usando Configuração do Firebase:", firebaseConfig);
+
+        // Use o appId do ambiente Canvas para os caminhos do Firestore
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        console.log("Usando ID do App Canvas para Firestore:", appId);
+
+        let app;
+        let db;
+
+        // Função para inicializar o Firebase (sem autenticação)
+        async function initializeFirebase() {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+
+                console.log("Firebase inicializado. App:", app, "DB:", db);
+
+                // Como a autenticação foi removida, a página principal é exibida diretamente
+                window.showPage('appHomePage');
+
+            } catch (error) {
+                console.error("Erro ao inicializar Firebase:", error);
+                window.showMessage("Erro de Inicialização", `Não foi possível conectar ao Firebase: ${error.message}`);
+            }
+        }
+
+        // Chamada de inicialização ao carregar o script
+        initializeFirebase();
+
+        // Expor variáveis e funções necessárias para o escopo global (para uso no script principal)
+        window.db = db;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.getDoc = getDoc;
+        window.collection = collection;
+        window.appId = appId;
+    </script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #f3f4f6;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start; /* Alinha ao topo para melhor fluxo de conteúdo */
+            background-color: #f3f4f6; /* Cor de fundo padrão para todas as páginas */
+            display: flex; /* Para empilhar a nav e o conteúdo verticalmente */
+            flex-direction: column;
             min-height: 100vh;
-            padding: 20px;
+            padding: 0; /* Remove padding padrão do body */
+            margin: 0; /* Remove margin padrão do body */
             box-sizing: border-box;
+            width: 100%; /* Garante que o corpo ocupe 100% da largura */
+        }
+        .fixed-top-nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            z-index: 1000; /* Garante que o menu esteja acima de outros elementos */
+            background-color: #2563eb; /* Cor de fundo para o menu fixo */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            height: 64px; /* Altura explícita para a nav */
+        }
+        .content-area-after-nav {
+            flex-grow: 1; /* Faz com que ocupe o restante da altura disponível */
+            padding-top: 64px; /* Empurra o conteúdo para baixo da nav fixa */
+            display: flex; /* Para centralizar o page-container */
+            justify-content: center;
+            align-items: flex-start;
+            width: 100%;
+            box-sizing: border-box;
+            padding-bottom: 20px; /* Adiciona padding na parte inferior do wrapper */
         }
         .page-container {
-            background-color: #ffffff;
+            background-color: #ffffff; /* Fundo branco para o contêiner principal de páginas */
             border-radius: 1rem; /* rounded-xl */
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* shadow-xl */
-            padding: 2.5rem; /* p-10 */
-            max-width: 900px; /* Largura máxima aumentada para melhor layout */
+            /* Removido padding aqui, será aplicado às páginas individuais */
+            width: 100%; /* Ocupa 100% da largura do pai */
+            max-width: 100%; /* Permite que ele se expanda totalmente */
+            margin-left: auto; /* Centraliza horizontalmente */
+            margin-right: auto; /* Centraliza horizontalmente */
+            flex-grow: 1; /* Permite que ocupe o espaço disponível em um layout flex */
+            position: relative; /* Crucial para o posicionamento absoluto das páginas filhas */
+            min-height: calc(100vh - 64px - 40px); /* Ajusta a altura para preencher a tela, considerando nav e padding do content-area-after-nav */
+            box-sizing: border-box;
+            overflow: hidden; /* Garante que o conteúdo não vaze do container arredondado */
+        }
+
+        /* Estilos para as páginas individuais */
+        .page {
+            position: absolute; /* Tira do fluxo normal, permitindo sobreposição */
+            top: 0;
+            left: 0;
             width: 100%;
+            height: 100%; /* Preenche o page-container */
+            overflow-y: auto; /* Permite rolagem dentro da página se o conteúdo for muito longo */
+            padding: 2.5rem; /* Padding aplicado aqui */
+            box-sizing: border-box;
+            background-color: #ffffff; /* Garante que as páginas tenham um fundo branco por padrão */
+            border-radius: 1rem; /* Herda do page-container */
+        }
+        .page.hidden {
+            display: none;
         }
 
         /* Estilos para as abas (mantidos, mas a lógica de navegação mudou para páginas) */
@@ -119,7 +220,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(0, 0, 0, 0.5);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -189,144 +290,186 @@
         .modal-footer button:hover {
             background-color: #4f46e5;
         }
-        /* Login and Registration Page Specific Styles */
-        #loginPage, #registrationPage {
-            max-width: 450px; /* Smaller width for forms */
-            text-align: center;
+
+        /* Estilo para o plano de fundo da página inicial */
+        #appHomePage {
+            background-image: url('https://images.unsplash.com/photo-1519389950473-47ba0277781c?q=80&w=2070&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D'); /* Imagem de fundo mais legal */
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed; /* Mantém a imagem fixa ao rolar */
+            color: #ffffff; /* Ajusta a cor do texto para melhor contraste */
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.3); /* Adiciona uma sombra ao texto */
+            display: flex; /* Para centralizar o conteúdo */
+            flex-direction: column; /* Para empilhar o conteúdo verticalmente */
+            justify-content: center; /* Centraliza verticalmente */
+            align-items: center; /* Centraliza horizontalmente */
+            min-height: 100%; /* Garante que ocupe toda a altura do page-container */
+            height: auto; /* Permite que o conteúdo defina a altura */
         }
-        #loginPage input, #registrationPage input {
-            padding: 0.75rem;
-            border: 1px solid #d1d5db;
-            border-radius: 0.5rem;
-            width: 100%;
-            margin-bottom: 1rem;
+        #appHomePage h1, #appHomePage p {
+            color: #ffffff; /* Garante que o texto seja branco */
         }
-        #loginPage button, #registrationPage button {
-            width: 100%;
-            padding: 0.75rem;
-            background-color: #4f46e5;
-            color: white;
-            font-weight: 600;
-            border-radius: 0.5rem;
-            transition: background-color 0.2s;
+        #appHomePage .text-lg {
+            color: #e0e7ff; /* Cor mais clara para o parágrafo */
         }
-        #loginPage button:hover, #registrationPage button:hover {
-            background-color: #4338ca;
-        }
-        .error-message {
-            color: #ef4444;
-            font-size: 0.875rem;
-            margin-top: -0.5rem;
-            margin-bottom: 1rem;
-        }
-        .success-message {
-            color: #10b981; /* green-500 */
-            font-size: 0.875rem;
-            margin-top: -0.5rem;
-            margin-bottom: 1rem;
+
+        /* Estilo para as páginas da calculadora, relatório e arquivos, garantindo fundo branco */
+        #calculatorPage, #reportPage, #filesPage {
+            background-color: #ffffff;
         }
     </style>
 </head>
 <body>
-    <div class="page-container" id="mainContainer">
-        <!-- Página de Login -->
-        <div id="loginPage" class="page active">
-            <h1 class="text-3xl font-bold text-gray-800 mb-8 text-center">Entrar na Calculadora de DAE</h1>
-            <form id="loginForm">
-                <input type="text" id="loginUsername" placeholder="Usuário" class="mb-4" required>
-                <input type="password" id="loginPassword" placeholder="Senha" class="mb-4" required>
-                <p id="loginError" class="error-message hidden">Usuário ou senha incorretos.</p>
-                <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
-                    Entrar
-                </button>
-            </form>
-            <p class="mt-6 text-gray-600">Não tem uma conta? <a href="#" id="goToRegisterBtn" class="text-indigo-600 hover:underline">Cadastre-se aqui</a></p>
-        </div>
-
-        <!-- Página de Cadastro -->
-        <div id="registrationPage" class="page hidden">
-            <h1 class="text-3xl font-bold text-gray-800 mb-8 text-center">Cadastre-se</h1>
-            <form id="registrationForm">
-                <input type="text" id="registerUsername" placeholder="Novo Usuário" class="mb-4" required>
-                <input type="password" id="registerPassword" placeholder="Nova Senha" class="mb-4" required>
-                <input type="password" id="confirmPassword" placeholder="Confirmar Senha" class="mb-4" required>
-                <p id="registrationError" class="error-message hidden"></p>
-                <p id="registrationSuccess" class="success-message hidden">Cadastro realizado com sucesso! Faça login.</p>
-                <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
-                    Cadastrar
-                </button>
-            </form>
-            <p class="mt-6 text-gray-600">Já tem uma conta? <a href="#" id="goToLoginBtn" class="text-indigo-600 hover:underline">Faça login aqui</a></p>
-        </div>
-
-        <!-- Página Principal da Aplicação (Após Login) -->
-        <div id="appHomePage" class="page hidden">
-            <h1 class="text-3xl font-bold text-gray-800 mb-8 text-center">Bem-vindo(a)!</h1>
-            <p class="text-lg text-gray-600 text-center mb-10">
-                Selecione uma ferramenta para começar:
-            </p>
-            <button id="goToCalculatorBtn" class="w-full px-8 py-4 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 text-xl">
-                Abrir Calculadora de DAE por XML
-            </button>
-        </div>
-
-        <!-- Página da Calculadora de DAE por XML -->
-        <div id="calculatorPage" class="page hidden">
-            <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Calculadora de DAE por XML</h1>
-
-            <div class="tabs-container">
-                <div class="tab-buttons">
-                    <div class="tab-button active" data-tab="calculatorTab">Calculadora de DAE por XML</div>
-                    <div class="tab-button" data-tab="otherTab">Outra Aba</div>
-                    <!-- Você pode adicionar mais abas aqui -->
-                </div>
-
-                <div id="calculatorTab" class="tab-content active">
-                    <!-- Conteúdo existente da Calculadora de DAE por XML -->
-                    <div id="drop-area" class="mb-6">
-                        <p class="mb-2">Arraste e solte arquivos XML aqui</p>
-                        <p class="text-sm">ou</p>
-                        <button class="mt-4 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
-                            Clique para selecionar arquivos
-                        </button>
-                        <input type="file" id="fileInput" multiple accept=".xml">
+    <!-- Menu Fixo no Topo -->
+    <nav class="bg-blue-600 rounded-lg shadow-lg fixed-top-nav">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center w-full">
+                    <!-- Logo Adicionada Aqui -->
+                    <div class="flex-shrink-0">
+                        <!--
+                            Se a sua logo não estiver a carregar, pode ser devido a problemas de caminho no ambiente.
+                            Uma solução robusta é converter a imagem para Base64 e inseri-la diretamente aqui.
+                            Você pode usar ferramentas online para converter sua imagem PNG/JPG para Base64.
+                            Exemplo: <img class="h-10 w-auto max-h-full" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..." alt="Sua Logo">
+                            Por enquanto, um placeholder será exibido.
+                        -->
+                        <img class="h-10 w-auto max-h-full" src="https://placehold.co/120x40/cccccc/000000?text=Logo+Aqui" alt="Logo da Empresa">
                     </div>
-
-                    <div id="selected-files-display" class="file-list mb-6 hidden">
-                        <h4 class="font-semibold text-gray-800 mb-2">Arquivos Selecionados:</h4>
-                        <div id="fileNames"></div>
-                    </div>
-
-                    <div class="flex flex-col sm:flex-row gap-4 mb-6">
-                        <button id="calculateBtn" class="flex-1 px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                            Calcular DAE
-                        </button>
-                        <button id="clearBtn" class="flex-1 px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
-                            Limpar
-                        </button>
-                    </div>
-
-
-                    <div id="results" class="mt-8">
-                        <h2 class="text-2xl font-bold text-gray-800 mb-4">Resultados:</h2>
-                        <div id="individualResults" class="space-y-3">
-                            <p class="text-gray-600">Nenhum arquivo processado ainda.</p>
+                    <div class="hidden md:block w-full">
+                        <div class="flex items-baseline space-x-2 justify-start ml-4"> <!-- Adicionado ml-4 para espaçamento da logo -->
+                            <!-- Botão Home -->
+                            <div class="relative group">
+                                <a href="#" id="menuHomeBtn" class="text-white hover:bg-blue-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium flex items-center">
+                                    <img src="https://img.icons8.com/ios-filled/50/ffffff/home.png" alt="Home Icon" class="w-5 h-5 mr-2">
+                                    Home
+                                </a>
+                            </div>
+                            <!-- Fiscal Menu -->
+                            <div class="relative group">
+                                <a href="#" class="text-white hover:bg-blue-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">
+                                    Fiscal
+                                </a>
+                                <div class="absolute hidden group-hover:block bg-blue-700 shadow-lg rounded-md mt-2 w-48 z-10">
+                                    <a href="#" id="menuCalculatorBtn" class="block px-3 py-1 text-sm text-white hover:bg-blue-500 hover:text-white rounded-md hover:shadow-md">
+                                        Calculadora de DAE por XML
+                                    </a>
+                                </div>
+                            </div>
+                            <!-- Novo Menu: Relatório Fiscal -->
+                            <div class="relative group">
+                                <a href="#" id="menuReportBtn" class="text-white hover:bg-blue-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">
+                                    Relatório Fiscal
+                                </a>
+                            </div>
+                            <!-- Novo Menu: Arquivos -->
+                            <div class="relative group">
+                                <a href="#" id="menuFilesBtn" class="text-white hover:bg-blue-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">
+                                    Arquivos
+                                </a>
+                            </div>
                         </div>
-                        <h3 class="text-xl font-bold text-gray-800 mt-6 flex justify-between items-center">
-                            Total Geral DAE: <span id="grandTotalDAE" class="text-green-700 text-2xl">R$ 0,00</span>
-                        </h3>
                     </div>
                 </div>
-
-                <div id="otherTab" class="tab-content">
-                    <h2 class="text-xl font-bold text-gray-800 mb-4">Conteúdo da Outra Aba</h2>
-                    <p class="text-gray-600">Este é um exemplo de conteúdo para uma aba futura. Você pode adicionar outras ferramentas ou informações aqui.</p>
-                </div>
-                <!-- Mais conteúdos de abas aqui -->
             </div>
-            <button id="backToAppHomeBtn" class="w-full px-6 py-3 mt-8 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
-                Voltar para a Página Inicial
-            </button>
+        </div>
+    </nav>
+
+    <!-- Contêiner principal para o conteúdo, empurrado para baixo da nav -->
+    <div class="content-area-after-nav">
+        <div class="page-container" id="mainContainer">
+            <!-- Página Principal da Aplicação -->
+            <div id="appHomePage" class="page active">
+                <h1 class="text-3xl font-bold text-center mb-8">Bem-vindo(a)!</h1>
+                <p class="text-lg text-center mb-10">
+                    Selecione uma ferramenta para começar:
+                </p>
+            </div>
+
+            <!-- Página da Calculadora de DAE por XML -->
+            <div id="calculatorPage" class="page hidden">
+                <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Calculadora de DAE por XML</h1>
+
+                <div class="tabs-container">
+                    <div class="tab-buttons">
+                        <div class="tab-button active" data-tab="calculatorTab">Calculadora de DAE por XML</div>
+                    </div>
+
+                    <div id="calculatorTab" class="tab-content active">
+                        <p class="text-gray-700 mb-4">Arraste e solte arquivos XML para calcular o DAE.</p>
+
+                        <div id="drop-area" class="mb-6">
+                            <p class="mb-2">Arraste e solte arquivos XML aqui</p>
+                            <p class="text-sm">ou</p>
+                            <button class="mt-4 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                                Clique para selecionar arquivos
+                            </button>
+                            <input type="file" id="fileInput" multiple accept=".xml">
+                        </div>
+
+                        <div id="selected-files-display" class="file-list mb-6 hidden">
+                            <h4 class="font-semibold text-gray-800 mb-2">Arquivos Selecionados:</h4>
+                            <div id="fileNames"></div>
+                        </div>
+
+                        <div class="flex flex-col sm:flex-row gap-2 mb-4">
+                            <button id="calculateBtn" class="flex-1 px-4 py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Calcular DAE
+                            </button>
+                            <button id="clearBtn" class="flex-1 px-4 py-2 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
+                                Limpar
+                            </button>
+                        </div>
+
+                        <div class="flex flex-col sm:flex-row gap-2 mb-4">
+                            <button id="exportPdfBtn" class="flex-1 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Gerar PDF
+                            </button>
+                            <button id="exportXlsBtn" class="flex-1 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Gerar XLS
+                            </button>
+                            <button id="exportCsvBtn" class="flex-1 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Gerar CSV
+                            </button>
+                            <button id="printBtn" class="flex-1 px-4 py-2 bg-gray-600 text-white font-semibold rounded-lg shadow-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                                Imprimir
+                            </button>
+                        </div>
+
+                        <div id="results" class="mt-8">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-4">Resultados:</h2>
+                            <div id="individualResults" class="space-y-3">
+                                <p class="text-gray-600">Nenhum arquivo processado ainda.</p>
+                            </div>
+                            <h3 class="text-xl font-bold text-gray-800 mt-6 flex justify-between items-center">
+                                Total Geral DAE: <span id="grandTotalDAE" class="text-green-700 text-2xl">R$ 0,00</span>
+                            </h3>
+                        </div>
+                    </div>
+                </div>
+                <button id="backToAppHomeBtn" class="w-full px-4 py-2 mt-8 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                    Voltar para a Página Inicial
+                </button>
+            </div>
+
+            <!-- Nova Página: Relatório Fiscal -->
+            <div id="reportPage" class="page hidden">
+                <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Relatório Fiscal</h1>
+                <p class="text-lg text-gray-700 text-center">Página em construção. Em breve, funcionalidades de relatório estarão disponíveis aqui.</p>
+                <button id="backToAppHomeBtnReport" class="w-full px-4 py-2 mt-8 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                    Voltar para a Página Inicial
+                </button>
+            </div>
+
+            <!-- Nova Página: Arquivos -->
+            <div id="filesPage" class="page hidden">
+                <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Arquivos</h1>
+                <p class="text-lg text-gray-700 text-center">Página em construção. Em breve, funcionalidades de gerenciamento de arquivos estarão disponíveis aqui.</p>
+                <button id="backToAppHomeBtnFiles" class="w-full px-4 py-2 mt-8 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                    Voltar para a Página Inicial
+                </button>
+            </div>
         </div>
     </div>
 
@@ -347,30 +490,48 @@
         </div>
     </div>
 
-    <script>
+    <script type="text/javascript">
+        // --- Funções globais de navegação e modal ---
+        function showPage(pageId) {
+            // Esconde todas as páginas e mostra apenas a solicitada
+            document.querySelectorAll('.page').forEach(page => page.classList.add('hidden'));
+            document.getElementById(pageId).classList.remove('hidden');
+        }
+
+        function showLoading() {
+            document.getElementById('loadingOverlay').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.add('hidden');
+        }
+
+        function showMessage(header, body) {
+            document.getElementById('modalHeader').textContent = header;
+            document.getElementById('modalBody').textContent = body;
+            document.getElementById('customModal').classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('customModal').classList.remove('show');
+        }
+
+        // --- Variáveis e Event Listeners do Script Principal ---
         const mainContainer = document.getElementById('mainContainer');
-        const loginPage = document.getElementById('loginPage');
-        const registrationPage = document.getElementById('registrationPage'); // Nova página de cadastro
         const appHomePage = document.getElementById('appHomePage');
         const calculatorPage = document.getElementById('calculatorPage');
+        const reportPage = document.getElementById('reportPage'); // Nova página de relatório
+        const filesPage = document.getElementById('filesPage');   // Nova página de arquivos
 
-        const loginForm = document.getElementById('loginForm');
-        const loginUsernameInput = document.getElementById('loginUsername');
-        const loginPasswordInput = document.getElementById('loginPassword');
-        const loginError = document.getElementById('loginError');
+        const menuHomeBtn = document.getElementById('menuHomeBtn');
+        const menuCalculatorBtn = document.getElementById('menuCalculatorBtn');
+        const menuReportBtn = document.getElementById('menuReportBtn'); // Novo botão de menu Relatório
+        const menuFilesBtn = document.getElementById('menuFilesBtn');   // Novo botão de menu Arquivos
 
-        const registrationForm = document.getElementById('registrationForm'); // Formulário de cadastro
-        const registerUsernameInput = document.getElementById('registerUsername');
-        const registerPasswordInput = document.getElementById('registerPassword');
-        const confirmPasswordInput = document.getElementById('confirmPassword');
-        const registrationError = document.getElementById('registrationError');
-        const registrationSuccess = document.getElementById('registrationSuccess');
-
-        const goToRegisterBtn = document.getElementById('goToRegisterBtn'); // Botão para ir para cadastro
-        const goToLoginBtn = document.getElementById('goToLoginBtn'); // Botão para ir para login
-
-        const goToCalculatorBtn = document.getElementById('goToCalculatorBtn');
         const backToAppHomeBtn = document.getElementById('backToAppHomeBtn');
+        const backToAppHomeBtnReport = document.getElementById('backToAppHomeBtnReport'); // Botão de voltar para home na página de relatório
+        const backToAppHomeBtnFiles = document.getElementById('backToAppHomeBtnFiles');   // Botão de voltar para home na página de arquivos
+
         const clearBtn = document.getElementById('clearBtn');
 
         const dropArea = document.getElementById('drop-area');
@@ -378,81 +539,24 @@
         const calculateBtn = document.getElementById('calculateBtn');
         const individualResults = document.getElementById('individualResults');
         const grandTotalDAE = document.getElementById('grandTotalDAE');
-        const loadingOverlay = document.getElementById('loadingOverlay');
         const selectedFilesDisplay = document.getElementById('selected-files-display');
         const fileNamesContainer = document.getElementById('fileNames');
 
         const customModal = document.getElementById('customModal');
-        const modalHeader = document.getElementById('modalHeader');
-        const modalBody = document.getElementById('modalBody');
         const modalCloseBtn = document.getElementById('modalCloseBtn');
 
+        const exportPdfBtn = document.getElementById('exportPdfBtn');
+        const exportXlsBtn = document = document.getElementById('exportXlsBtn');
+        const exportCsvBtn = document.getElementById('exportCsvBtn');
+        const printBtn = document.getElementById('printBtn');
+
         let uploadedFiles = [];
-        let registeredUsers = {}; // Para armazenar usuários cadastrados (temporário)
-
-        // --- Funções de navegação entre páginas ---
-        function showPage(pageId) {
-            loginPage.classList.add('hidden');
-            registrationPage.classList.add('hidden');
-            appHomePage.classList.add('hidden');
-            calculatorPage.classList.add('hidden');
-
-            document.getElementById(pageId).classList.remove('hidden');
-        }
-
-        // --- Lógica de Login ---
-        loginForm.addEventListener('submit', function(event) {
-            event.preventDefault();
-            const username = loginUsernameInput.value;
-            const password = loginPasswordInput.value;
-
-            if (registeredUsers[username] && registeredUsers[username] === password) {
-                loginError.classList.add('hidden');
-                showPage('appHomePage');
-            } else {
-                loginError.classList.remove('hidden');
-            }
-        });
-
-        // --- Lógica de Cadastro ---
-        registrationForm.addEventListener('submit', function(event) {
-            event.preventDefault();
-            const username = registerUsernameInput.value;
-            const password = registerPasswordInput.value;
-            const confirmPassword = confirmPasswordInput.value;
-
-            registrationError.classList.add('hidden');
-            registrationSuccess.classList.add('hidden');
-
-            if (password !== confirmPassword) {
-                registrationError.textContent = 'As senhas não coincidem.';
-                registrationError.classList.remove('hidden');
-                return;
-            }
-
-            if (registeredUsers[username]) {
-                registrationError.textContent = 'Nome de usuário já existe.';
-                registrationError.classList.remove('hidden');
-                return;
-            }
-
-            registeredUsers[username] = password;
-            registrationSuccess.classList.remove('hidden');
-            // Limpa os campos após o cadastro
-            registerUsernameInput.value = '';
-            registerPasswordInput.value = '';
-            confirmPasswordInput.value = '';
-            // Opcional: Redirecionar para a tela de login após um tempo
-            setTimeout(() => {
-                showPage('loginPage');
-                loginUsernameInput.value = username; // Preenche o usuário para facilitar o login
-            }, 1500);
-        });
+        let processedResults = [];
 
         // --- Funções de interação com o usuário (Drag & Drop, Clique) ---
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             dropArea.addEventListener(eventName, preventDefaults, false);
-            document.body.addEventListener(eventName, preventDefaults, false); // Previne o comportamento padrão do navegador
+            document.body.addEventListener(eventName, preventDefaults, false);
         });
 
         ['dragenter', 'dragover'].forEach(eventName => {
@@ -465,28 +569,109 @@
 
         dropArea.addEventListener('drop', handleDrop, false);
         fileInput.addEventListener('change', handleFilesFromInput);
-        dropArea.addEventListener('click', () => fileInput.click()); // Permite clicar na área para abrir o seletor de arquivos
+        dropArea.addEventListener('click', () => fileInput.click());
         calculateBtn.addEventListener('click', processFiles);
         modalCloseBtn.addEventListener('click', closeModal);
 
         // Listeners para os botões de navegação e limpar
-        goToCalculatorBtn.addEventListener('click', () => showPage('calculatorPage'));
+        menuHomeBtn.addEventListener('click', () => showPage('appHomePage'));
+        menuCalculatorBtn.addEventListener('click', () => showPage('calculatorPage'));
+        menuReportBtn.addEventListener('click', () => showPage('reportPage'));
+        menuFilesBtn.addEventListener('click', () => showPage('filesPage'));
+
         backToAppHomeBtn.addEventListener('click', () => {
             showPage('appHomePage');
             clearCalculatorState();
         });
+        backToAppHomeBtnReport.addEventListener('click', () => showPage('appHomePage'));
+        backToAppHomeBtnFiles.addEventListener('click', () => showPage('appHomePage'));
+
         clearBtn.addEventListener('click', clearCalculatorState);
 
-        goToRegisterBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            showPage('registrationPage');
-            registrationError.classList.add('hidden'); // Esconde erros anteriores
-            registrationSuccess.classList.add('hidden'); // Esconde sucesso anterior
+        // Listeners para os novos botões de exportação/impressão
+        exportPdfBtn.addEventListener('click', async () => {
+            showLoading();
+            const { jsPDF } = window.jspdf;
+            const resultsDiv = document.getElementById('results');
+
+            try {
+                const canvas = await html2canvas(resultsDiv, { scale: 2 });
+                const imgData = canvas.toDataURL('image/png');
+
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const imgWidth = 210;
+                const pageHeight = 297;
+                const imgHeight = canvas.height * imgWidth / canvas.width;
+                let heightLeft = imgHeight;
+                let position = 0;
+                let margin = 10;
+
+                pdf.addImage(imgData, 'PNG', margin, position + margin, imgWidth - (2 * margin), imgHeight);
+                heightLeft -= pageHeight;
+
+                while (heightLeft >= 0) {
+                    position = heightLeft - imgHeight;
+                    pdf.addPage();
+                    pdf.addImage(imgData, 'PNG', margin, position + margin, imgWidth - (2 * margin), imgHeight);
+                    heightLeft -= pageHeight;
+                }
+
+                pdf.save('resultados_dae.pdf');
+                showMessage('PDF Gerado', 'O arquivo PDF foi gerado com sucesso!');
+            } catch (error) {
+                console.error('Erro ao gerar PDF:', error);
+                showMessage('Erro ao Gerar PDF', 'Não foi possível gerar o PDF. Tente novamente.');
+            } finally {
+                hideLoading();
+            }
         });
-        goToLoginBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            showPage('loginPage');
-            loginError.classList.add('hidden'); // Esconde erros anteriores
+
+        exportXlsBtn.addEventListener('click', () => {
+            if (processedResults.length === 0) {
+                showMessage('Nenhum Resultado', 'Nenhum resultado para exportar. Calcule o DAE primeiro.');
+                return;
+            }
+            const csvContent = convertToCsv(processedResults);
+            downloadFile('resultados_dae.xls', csvContent, 'application/vnd.ms-excel');
+            showMessage('XLS Gerado', 'O arquivo XLS foi gerado com sucesso!');
+        });
+
+        exportCsvBtn.addEventListener('click', () => {
+            if (processedResults.length === 0) {
+                showMessage('Nenhum Resultado', 'Nenhum resultado para exportar. Calcule o DAE primeiro.');
+                return;
+            }
+            const csvContent = convertToCsv(processedResults);
+            downloadFile('resultados_dae.csv', csvContent, 'text/csv;charset=utf-8;');
+            showMessage('CSV Gerado', 'O arquivo CSV foi gerado com sucesso!');
+        });
+
+        printBtn.addEventListener('click', () => {
+            const resultsContent = document.getElementById('results').outerHTML;
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write('<html><head><title>Imprimir DAE</title>');
+            printWindow.document.write('<link href="https://cdn.tailwindcss.com" rel="stylesheet">');
+            printWindow.document.write('<style>');
+            printWindow.document.write(`
+                body { font-family: 'Inter', sans-serif; margin: 20px; }
+                .page-container { box-shadow: none; border: none; padding: 0; }
+                body > *:not(#results) { display: none !important; }
+                #results { width: 100%; margin: 0; padding: 0; }
+                .file-result { page-break-inside: avoid; margin-bottom: 1rem; border: 1px solid #e5e7eb; padding: 1rem; border-radius: 0.5rem; }
+                ul { list-style: disc; padding-left: 20px; }
+                h1, h2, h3, h4 { color: #1f2937; margin-bottom: 0.5rem; }
+                p { color: #4b5563; }
+                .text-indigo-700 { color: #4338ca; }
+                .text-green-700 { color: #047857; }
+                .file-result.success { border-color: #34d399; background-color: #ecfdf5; }
+                .file-result.error { border-color: #ef4444; background-color: #fef2f2; }
+            `);
+            printWindow.document.write('</style>');
+            printWindow.document.write('</head><body>');
+            printWindow.document.write(resultsContent);
+            printWindow.document.close();
+            printWindow.focus();
+            printWindow.print();
         });
 
         function preventDefaults (e) {
@@ -536,6 +721,9 @@
             });
             individualResults.innerHTML = '<p class="text-gray-600">Clique em "Calcular DAE" para processar os arquivos.</p>';
             grandTotalDAE.textContent = 'R$ 0,00';
+            exportPdfBtn.disabled = true;
+            exportXlsBtn.disabled = true;
+            exportCsvBtn.disabled = true;
         }
 
         function clearCalculatorState() {
@@ -546,29 +734,45 @@
             fileNamesContainer.innerHTML = '';
             individualResults.innerHTML = '<p class="text-gray-600">Nenhum arquivo processado ainda.</p>';
             grandTotalDAE.textContent = 'R$ 0,00';
+            processedResults = [];
+            exportPdfBtn.disabled = true;
+            exportXlsBtn.disabled = true;
+            exportCsvBtn.disabled = true;
         }
 
-        function showLoading() {
-            loadingOverlay.classList.remove('hidden');
+        function convertToCsv(data) {
+            if (data.length === 0) return '';
+
+            const headers = ['Nota Fiscal', 'DAE Total (R$)', 'ICMS Calculado da Nota (R$)'];
+            let csv = headers.join(',') + '\n';
+
+            data.forEach(row => {
+                const values = [
+                    `"${row.notaFiscal}"`,
+                    row.daeTotal.toFixed(2),
+                    row.icmsCalculadoNota.toFixed(2)
+                ];
+                csv += values.join(',') + '\n';
+            });
+            return csv;
         }
 
-        function hideLoading() {
-            loadingOverlay.classList.add('hidden');
-        }
-
-        function showMessage(header, body) {
-            modalHeader.textContent = header;
-            modalBody.textContent = body;
-            customModal.classList.add('show');
-        }
-
-        function closeModal() {
-            customModal.classList.remove('show');
+        function downloadFile(filename, content, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         async function processFiles() {
             showLoading();
             individualResults.innerHTML = '';
+            processedResults = [];
             let totalGrandDAE = 0;
 
             if (uploadedFiles.length === 0) {
@@ -577,7 +781,19 @@
                 return;
             }
 
-            const MVA_PERCENTAGE = 0.17511;
+            // Parâmetros de cálculo (verifique se estes valores estão de acordo com suas regras fiscais)
+            const aliquotainterna = 0.205; // Alíquota interna do estado de destino (ex: 20.5%)
+            const aliquotaMercadoriaEstrangeira = 0.04; // Alíquota interestadual para mercadorias importadas (4%) - Não usada no cálculo agregado
+            const aliquotaInterEstadual = 0.07; // Alíquota interestadual para mercadorias nacionais (7%) - Não usada no cálculo agregado
+            const coefModificadorBCNormal = 1.0; // Coeficiente modificador da Base de Cálculo Normal - Não usada no cálculo agregado
+            const coefAgregacaoSulSudesteNacional = 1.0; // Coeficiente de agregação para Sul/Sudeste (Nacional)
+            const coefAgregacaoSulSudesteEstrangeira = 1.0; // Coeficiente de agregação para Sul/Sudeste (Estrangeira) - Não usada no cálculo agregado
+            const coefModificadorBCAntecipado = 1.0; // Coeficiente modificador da Base de Cálculo Antecipado
+            const ipiIntegraBCAntecipado = 1.0; // Indica se IPI integra a Base de Cálculo Antecipado (1.0 para sim, 0.0 para não)
+            const freteFOBIntegraBCAntecipado = 1.0; // Indica se Frete FOB integra a Base de Cálculo Antecipado (1.0 para sim, 0.0 para no)
+            const despesaAcessoriaIntegraBCAntecipado = 1.0; // Indica se Despesa Acessória integra a Base de Cálculo Antecipado (1.0 para sim, 0.0 para não)
+            const consideraDescontoCalculo = 1.0; // Indica se o desconto deve ser considerado no cálculo (1.0 para sim, 0.0 para no)
+            const valorAliquotaEmitente = 0.07; // Alíquota do ICMS do emitente (ex: 7%)
 
             for (const file of uploadedFiles) {
                 const reader = new FileReader();
@@ -587,62 +803,103 @@
                         const xmlString = event.target.result;
                         let fileTotalDAE = 0;
                         let statusClass = 'success';
-                        let fileMessages = [];
 
                         try {
                             const parser = new DOMParser();
                             const xmlDoc = parser.parseFromString(xmlString, "text/xml");
 
-                            const vProdStr = xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vProd')?.textContent || '0';
-                            const vProd = parseFloat(vProdStr.replace(',', '.')) || 0;
+                            const nNFElement = xmlDoc.querySelector('NFe > infNFe > ide > nNF');
+                            const notaFiscalNumber = nNFElement ? nNFElement.textContent : 'Não Identificado';
 
-                            const vIPIStr = xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vIPI')?.textContent || '0';
-                            const vIPI = parseFloat(vIPIStr.replace(',', '.')) || 0;
+                            // Extração de valores totais da nota fiscal
+                            const valorTotalProdutosNotaFiscal = parseFloat(xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vProd')?.textContent.replace(',', '.') || '0');
+                            const valorTotalIPIItensNotaFiscal = parseFloat(xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vIPI')?.textContent.replace(',', '.') || '0');
+                            const valorFreteTotal = parseFloat(xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vFrete')?.textContent.replace(',', '.') || '0');
+                            const valorSeguroTotal = parseFloat(xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vSeg')?.textContent.replace(',', '.') || '0');
+                            const valorDespesasAcessoriasTotal = parseFloat(xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vOutro')?.textContent.replace(',', '.') || '0');
+                            const valorTotalDescontoNotaFiscal = parseFloat(xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vDesc')?.textContent.replace(',', '.') || '0');
+                            const valorTotalICMSNotaFiscal = parseFloat(xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vICMS')?.textContent.replace(',', '.') || '0');
 
-                            const baseDePartida = vProd + vIPI;
-                            let baseCalculoItemAntecipado = baseDePartida * (1 + MVA_PERCENTAGE);
 
-                            const creditoUtilizadoStr = xmlDoc.querySelector('NFe > infNFe > total > ICMSTot > vICMS')?.textContent || '0';
-                            const creditoUtilizado = parseFloat(creditoUtilizadoStr.replace(',', '.')) || 0;
+                            // Cálculo do ICMS destacado na nota fiscal (do emitente)
+                            // Se consideraDescontoCalculo for 1.0, o desconto é aplicado ao valor total dos produtos antes de calcular o ICMS do emitente.
+                            const baseCalculoICMSEmitente = valorTotalProdutosNotaFiscal - (valorTotalDescontoNotaFiscal * consideraDescontoCalculo) + valorFreteTotal + valorSeguroTotal + valorDespesasAcessoriasTotal;
+                            const icmsCalculadoNotaFiscal = baseCalculoICMSEmitente * valorAliquotaEmitente;
 
-                            const aliquotainterna = 0.205;
+                            // --- Lógica de Cálculo Simplificada (Agregada) para a Nota Fiscal ---
 
-                            if (isNaN(vProd) || isNaN(vIPI) || isNaN(baseCalculoItemAntecipado) || isNaN(creditoUtilizado) || isNaN(aliquotainterna)) {
-                                throw new Error("Valores numéricos para cálculo inválidos. Verifique o XML.");
+                            // 1. Valor de Partida Antecipado (Base de Cálculo ST inicial antes de MVA/ajustes)
+                            // Soma dos produtos, IPI, frete e despesas acessórias, considerando se integram a BC Antecipado
+                            const aggregatedValorPartidaAntecipado = (valorTotalProdutosNotaFiscal - (valorTotalDescontoNotaFiscal * consideraDescontoCalculo)) +
+                                                                     (valorTotalIPIItensNotaFiscal * ipiIntegraBCAntecipado) +
+                                                                     (valorFreteTotal * freteFOBIntegraBCAntecipado) +
+                                                                     (valorDespesasAcessoriasTotal * despesaAcessoriaIntegraBCAntecipado);
+
+                            // 2. Crédito Fiscal de Entrada (CFLA) - ICMS Próprio destacado na nota
+                            // Este valor é extraído diretamente do total de ICMS na nota (vICMS).
+                            const aggregatedCFLAItem = valorTotalICMSNotaFiscal;
+
+                            // 3. Crédito Total Utilizado (neste caso, é o próprio CFLA agregado)
+                            let creditoUtilizadoAggregated = aggregatedCFLAItem;
+
+                            // 4. Base de Cálculo do ICMS Antecipado (Base ST)
+                            let baseCalculoItemAntecipadoAggregated = 0;
+                            if ((1 - aliquotainterna) === 0) {
+                                throw new Error("Erro de divisão por zero: (1 - AliquotaInterna) é zero. Verifique a alíquota interna.");
                             }
+                            // Esta fórmula é uma forma de reverter o cálculo para encontrar a Base ST
+                            // se o valor de partida já inclui a ST e o crédito é subtraído.
+                            // É crucial que esta fórmula esteja correta para o seu regime fiscal.
+                            baseCalculoItemAntecipadoAggregated = (aggregatedValorPartidaAntecipado - aggregatedCFLAItem) / (1 - aliquotainterna);
 
-                            const CFLAItem = 0;
-                            const coefAgregacaoSulSudesteDaMercadoria = 1;
-                            const coefModificadorBCAnticipado = 1;
+                            // Aplicação de coeficientes de agregação e modificadores à Base de Cálculo Antecipado
+                            // Assumindo que coefAgregacaoSulSudesteNacional é o MVA ou similar para todas as origens
+                            baseCalculoItemAntecipadoAggregated *= coefAgregacaoSulSudesteNacional;
+                            baseCalculoItemAntecipadoAggregated *= coefModificadorBCAntecipado;
 
-                            fileTotalDAE = calculateDAE(
-                                baseCalculoItemAntecipado,
-                                aliquotainterna,
-                                creditoUtilizado
-                            );
+                            // 5. Cálculo do ICMS Antecipado (DAE total da nota)
+                            // Fórmula: (Base ST * Alíquota Interna) - Crédito Utilizado
+                            const icmsAntecipadoAggregated = (baseCalculoItemAntecipadoAggregated * aliquotainterna) - creditoUtilizadoAggregated;
 
-                            totalGrandDAE += fileTotalDAE;
+                            fileTotalDAE = icmsAntecipadoAggregated;
 
+                            // Exibição dos resultados para a nota fiscal
                             individualResults.innerHTML += `
                                 <div class="file-result ${statusClass}">
-                                    <p class="font-semibold text-gray-900">${file.name} - Total DAE: R$ ${fileTotalDAE.toFixed(2)}</p>
-                                    <ul class="list-disc list-inside text-gray-600 text-sm mt-2">
-                                        <li>Valor Total Produtos (vProd): ${vProd.toFixed(2)}</li>
-                                        <li>Valor Total IPI (vIPI): ${vIPI.toFixed(2)}</li>
-                                        <li>Base de Partida (vProd + vIPI): ${baseDePartida.toFixed(2)}</li>
-                                        <li>MVA Aplicada (Fixa): ${(MVA_PERCENTAGE * 100).toFixed(3)}%</li>
-                                        <li>Base Cálculo Antecipada (Calculada com MVA): ${baseCalculoItemAntecipado.toFixed(2)}</li>
-                                        <li>Alíquota Interna (Fixa): ${(aliquotainterna * 100).toFixed(2)}%</li>
-                                        <li>Crédito Utilizado (vICMS): ${creditoUtilizado.toFixed(2)}</li>
+                                    <p class="font-semibold text-gray-900">Nota Fiscal: ${notaFiscalNumber}</p>
+                                    <p class="font-semibold text-gray-900 mt-2">ICMS Calculado da Nota (Total): R$ ${icmsCalculadoNotaFiscal.toFixed(2)}</p>
+                                    <p class="font-semibold text-indigo-700 mt-2 text-lg">DAE Total da Nota (Simplificado): R$ ${fileTotalDAE.toFixed(2)}</p>
+                                    <h4 class="font-semibold text-gray-800 mt-4 mb-2">Detalhes do Cálculo Simplificado:</h4>
+                                    <ul class="list-disc list-inside text-gray-600 text-sm mt-1">
+                                        <li>Valor Total Produtos: ${valorTotalProdutosNotaFiscal.toFixed(4)}</li>
+                                        <li>Valor Total IPI: ${valorTotalIPIItensNotaFiscal.toFixed(4)}</li>
+                                        <li>Valor Total Frete: ${valorFreteTotal.toFixed(4)}</li>
+                                        <li>Valor Total Seguro: ${valorSeguroTotal.toFixed(4)}</li>
+                                        <li>Valor Total Despesas Acessórias: ${valorDespesasAcessoriasTotal.toFixed(4)}</li>
+                                        <li>Valor Total Desconto: ${valorTotalDescontoNotaFiscal.toFixed(4)}</li>
+                                        <li>Valor Partida Antecipado (Agregado): ${aggregatedValorPartidaAntecipado.toFixed(4)}</li>
+                                        <li>CFLA (ICMS Próprio da Nota): ${aggregatedCFLAItem.toFixed(4)}</li>
+                                        <li>Crédito Utilizado (Agregado): ${creditoUtilizadoAggregated.toFixed(4)}</li>
+                                        <li>Base de Cálculo Antecipada (Agregada): ${baseCalculoItemAntecipadoAggregated.toFixed(4)}</li>
+                                        <li>Alíquota Interna: ${(aliquotainterna * 100).toFixed(2)}%</li>
+                                        <li>Alíquota do Emitente: ${(valorAliquotaEmitente * 100).toFixed(2)}%</li>
                                     </ul>
                                 </div>
                             `;
+
+                            totalGrandDAE += fileTotalDAE;
+
+                            processedResults.push({
+                                notaFiscal: notaFiscalNumber,
+                                daeTotal: fileTotalDAE,
+                                icmsCalculadoNota: icmsCalculadoNotaFiscal,
+                            });
 
                         } catch (e) {
                             statusClass = 'error';
                             individualResults.innerHTML += `
                                 <div class="file-result ${statusClass}">
-                                    <p class="font-semibold text-gray-900">${file.name}</p>
+                                    <p class="font-semibold text-gray-900">Nota Fiscal: ${file.name}</p>
                                     <p>Erro ao processar XML: ${e.message}</p>
                                 </div>
                             `;
@@ -669,11 +926,16 @@
             uploadedFiles = [];
             selectedFilesDisplay.classList.add('hidden');
             hideLoading();
-        }
 
-        function calculateDAE(baseCalculoItemAntecipado, aliquotainterna, creditoUtilizado) {
-            let icmsAntecipadoItem = (baseCalculoItemAntecipado * aliquotainterna) - creditoUtilizado;
-            return icmsAntecipadoItem;
+            if (processedResults.length > 0) {
+                exportPdfBtn.disabled = false;
+                exportXlsBtn.disabled = false;
+                exportCsvBtn.disabled = false;
+            } else {
+                exportPdfBtn.disabled = true;
+                exportXlsBtn.disabled = true;
+                exportCsvBtn.disabled = true;
+            }
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -701,8 +963,11 @@
                 });
             });
 
-            // Inicia mostrando a página de login
-            showPage('loginPage');
+            // Inicializa diretamente na página principal da aplicação
+            showPage('appHomePage');
+            exportPdfBtn.disabled = true;
+            exportXlsBtn.disabled = true;
+            exportCsvBtn.disabled = true;
         });
     </script>
 </body>
